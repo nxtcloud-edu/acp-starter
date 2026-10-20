@@ -1,0 +1,47 @@
+/* 내 에이전트 플랫폼의 화면. 색과 배치를 마음대로 바꾼다. */
+:root {
+  --bg: #F5F8FA; --panel: #FFFFFF; --ink: #163047; --sub: #587183;
+  --accent: #087F87; --soft: #E6F2F2; --line: #CAD8E2; --warn: #B45309;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+       background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; }
+header { padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { margin: 0; font-size: 20px; }
+header p { margin: 4px 0 0; color: var(--sub); font-size: 13px; }
+code { white-space: nowrap; font-family: Menlo, monospace; font-size: 0.92em; background: var(--soft); padding: 1px 4px; border-radius: 4px; }
+main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+aside { border-right: 1px solid var(--line); padding: 16px; overflow-y: auto; background: var(--panel); }
+aside section + section { margin-top: 22px; }
+h2 { font-size: 14px; margin: 0 0 8px; color: var(--accent); }
+.row { display: flex; gap: 6px; }
+select, textarea { font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: #fff; color: var(--ink); }
+select { flex: 1; }
+button { font: inherit; border: 0; border-radius: 6px; padding: 6px 12px; background: var(--accent); color: #fff; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.link { background: none; color: var(--sub); padding: 0; font-size: 12px; }
+button.ghost { background: var(--soft); color: var(--accent); }
+.title-row { display: flex; justify-content: space-between; align-items: baseline; }
+.muted { color: var(--sub); font-size: 13px; margin: 6px 0 0; }
+.small { font-size: 12px; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 6px; font-size: 13px; }
+.list li .meta { color: var(--sub); font-size: 12px; }
+.list li.clickable { cursor: pointer; }
+.list li.clickable:hover { background: var(--soft); }
+.task { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#chat { display: flex; flex-direction: column; min-height: 0; }
+#log { flex: 1; overflow-y: auto; padding: 18px 22px; }
+.msg { max-width: 760px; margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.55; font-size: 14px; }
+.msg.user { background: var(--soft); margin-left: auto; }
+.msg.agent { background: var(--panel); border: 1px solid var(--line); }
+.msg.note { color: var(--sub); font-size: 12px; padding: 2px 0; margin-bottom: 6px; }
+.msg.error { color: var(--warn); }
+.msg.file { background: var(--panel); border: 1px dashed var(--accent); }
+.card { max-width: 760px; border: 2px solid var(--accent); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; background: var(--panel); }
+.card b { display: block; margin-bottom: 4px; }
+.card .detail { font-family: Menlo, monospace; font-size: 12px; color: var(--sub); margin-bottom: 8px; word-break: break-all; }
+.card .actions { display: flex; gap: 6px; }
+#composer { display: flex; gap: 8px; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel); }
+#composer textarea { flex: 1; resize: none; }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }

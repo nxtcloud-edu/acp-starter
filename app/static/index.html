@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 에이전트 플랫폼</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>내 에이전트 플랫폼</h1>
+    <p>acp-starter · 이 화면은 <code>app/static/</code>에서, 동작은 <code>dashboard.py</code>에서 고친다</p>
+  </header>
+
+  <main>
+    <aside>
+      <section>
+        <h2>에이전트</h2>
+        <div class="row">
+          <select id="agent"></select>
+          <button id="connect">연결</button>
+        </div>
+        <p id="state" class="muted">연결하지 않음</p>
+        <p class="muted small">로그인이 필요하면 터미널에서 <code>python login.py 이름</code></p>
+      </section>
+
+      <section>
+        <div class="title-row"><h2>일</h2><button id="reload-tasks" class="link">새로 읽기</button></div>
+        <ul id="tasks" class="list"></ul>
+        <p class="muted small"><code>tasks/</code>에 파일을 더하면 일이 늘어난다</p>
+      </section>
+
+      <section>
+        <div class="title-row"><h2>결과함</h2><button id="reload-outbox" class="link">새로 읽기</button></div>
+        <ul id="outbox" class="list"></ul>
+      </section>
+    </aside>
+
+    <section id="chat">
+      <div id="log"></div>
+      <form id="composer">
+        <textarea id="text" rows="2" placeholder="에이전트에게 맡길 일을 적는다. Enter로 보내고, Shift+Enter로 줄을 바꾼다."></textarea>
+        <button type="submit">보내기</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
