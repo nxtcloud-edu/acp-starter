@@ -1,7 +1,11 @@
 """터미널에서 에이전트와 대화한다. 도구 허락은 사람이 y/n으로 정한다.
 
-실행: python chat.py
+실행: python chat.py              (Kiro)
+      python chat.py claude       (Claude)
+      python chat.py codex        (Codex)
 """
+
+import sys
 
 from acp_client import AcpClient, AcpError
 
@@ -22,14 +26,20 @@ def ask_permission(tool_call):
 
 
 def main():
-    client = AcpClient("workspace", "starter",
-                       on_text=show_text, on_tool=show_tool, on_permission=ask_permission)
+    agent = sys.argv[1] if len(sys.argv) > 1 else "kiro"
+    try:
+        client = AcpClient("workspace", agent,
+                           on_text=show_text, on_tool=show_tool, on_permission=ask_permission)
+    except AcpError as error:
+        print(error)
+        return
     try:
         client.start()
     except AcpError as error:
         print(error)
+        client.close()
         return
-    print("대화를 시작합니다. 끝내려면 /exit 를 입력하세요.")
+    print(f"{agent} 에이전트와 대화를 시작합니다. 끝내려면 /exit 를 입력하세요.")
     try:
         while True:
             try:
@@ -41,7 +51,7 @@ def main():
             if not text:
                 continue
             client.prompt(text)
-            print(f"\n  (지금까지 쓴 크레딧: {client.credits:.3f})")
+            print(f"\n  (쓴 양: {client.usage_text()})")
     except AcpError as error:
         print(f"\n{error}")
     finally:

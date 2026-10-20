@@ -1,47 +1,77 @@
-"""Kiro CLI와 ACP로 대화하는 가장 작은 클라이언트.
+"""ACP로 에이전트(Kiro, Claude, Codex)와 대화하는 가장 작은 클라이언트.
 
-흐름: kiro-cli acp 실행 → initialize → session/new → session/prompt
+흐름: 에이전트 실행 → initialize → session/new → (안전 모드) → session/prompt
 메시지는 JSON 한 줄씩 표준 입출력으로 주고받는다(JSON-RPC 2.0).
+
+에이전트마다 이 레포 안의 샌드박스 홈(.homes/<이름>/)을 쓴다.
+그래서 내 컴퓨터의 전역 설정, 스킬, 플러그인, 기억을 가져오지 않는다.
 """
 
 import json
 import os
+import pathlib
 import shutil
 import subprocess
+
+ROOT = pathlib.Path(__file__).parent
+AGENTS_FILE = ROOT / "agents.json"
 
 
 class AcpError(Exception):
     """연결이나 응답이 잘못되었을 때 낸다."""
 
 
+def load_agent(name):
+    """agents.json에서 에이전트 하나의 설정을 읽는다."""
+    agents = json.loads(AGENTS_FILE.read_text(encoding="utf-8"))
+    if name not in agents:
+        raise AcpError(f"에이전트 '{name}'가 agents.json에 없습니다. 고를 수 있는 것: {', '.join(agents)}")
+    return agents[name]
+
+
+def sandbox_env(name, agent):
+    """샌드박스 홈을 가리키는 환경변수를 만든다. 폴더가 없으면 만든다."""
+    home = ROOT / ".homes" / name
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env[agent["home_env"]] = str(home)
+    env.update(agent.get("env", {}))
+    return env
+
+
 class AcpClient:
-    def __init__(self, workspace, agent, on_text=None, on_tool=None,
-                 on_permission=None, command=None):
-        # workspace: 에이전트가 일하는 폴더. 그 안의 .kiro/agents/<agent>.json을 읽는다.
+    def __init__(self, workspace, agent="kiro", on_text=None, on_tool=None,
+                 on_permission=None, command=None, env=None, config=None):
+        # workspace: 에이전트가 일하는 폴더.
+        # agent: agents.json의 이름(kiro, claude, codex).
         # on_text(text): 답의 조각이 올 때마다 부른다.
         # on_tool(update): 에이전트가 도구를 쓰기 시작하거나 끝낼 때 부른다.
         # on_permission(tool_call) -> bool: 허락이 필요할 때 부른다. 없으면 모두 거절한다.
+        # command, env, config: 테스트에서 실행 명령과 설정을 바꿀 때만 쓴다.
         self.workspace = os.path.abspath(workspace)
-        self.agent = agent
+        self.name = agent
+        self.config = config if config is not None else load_agent(agent)
         self.on_text = on_text or (lambda text: None)
         self.on_tool = on_tool or (lambda update: None)
         self.on_permission = on_permission or (lambda tool_call: False)
         self.command = command
+        self.env = env
         self.process = None
         self.session_id = None
         self.credits = 0.0
+        self.context_tokens = None
         self._next_id = 0
 
     def start(self):
-        command = self.command
-        if command is None:
-            executable = shutil.which("kiro-cli")
-            if executable is None:
-                raise AcpError("kiro-cli를 찾지 못했습니다. Kiro CLI를 설치하고 로그인하세요.")
-            command = [executable]
+        command = self.command or self.config["command"]
+        executable = shutil.which(command[0])
+        if executable is None:
+            raise AcpError(f"{command[0]}를 찾지 못했습니다. README의 준비 절을 보세요.")
+        env = self.env if self.env is not None else sandbox_env(self.name, self.config)
         self.process = subprocess.Popen(
-            [*command, "acp", "--agent", self.agent],
+            [executable, *command[1:]],
             cwd=self.workspace,
+            env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -56,14 +86,19 @@ class AcpClient:
                 "fs": {"readTextFile": False, "writeTextFile": False},
                 "terminal": False,
             },
-            "clientInfo": {"name": "kiro-acp-starter", "version": "0.1.0"},
+            "clientInfo": {"name": "acp-starter", "version": "0.2.0"},
         })
         # 2) 대화 하나를 연다.
         result = self._request("session/new", {"cwd": self.workspace, "mcpServers": []})
-        current = result.get("modes", {}).get("currentModeId")
-        if current != self.agent:
-            raise AcpError(f"에이전트 '{self.agent}'를 찾지 못했습니다(지금: {current}).")
         self.session_id = result["sessionId"]
+        expected = self.config.get("expect_mode")
+        current = result.get("modes", {}).get("currentModeId")
+        if expected and current != expected:
+            raise AcpError(f"에이전트 '{expected}'를 찾지 못했습니다(지금: {current}).")
+        # 3) 안전 모드로 바꾼다. 바꾸지 않으면 Claude와 Codex는 명령을 묻지 않고 실행한다.
+        safe_mode = self.config.get("safe_mode")
+        if safe_mode:
+            self._request("session/set_mode", {"sessionId": self.session_id, "modeId": safe_mode})
 
     def prompt(self, text):
         """질문 하나를 보내고, 에이전트가 이번 차례를 끝낼 때까지 기다린다."""
@@ -72,6 +107,15 @@ class AcpClient:
             "prompt": [{"type": "text", "text": text}],
         })
         return result["stopReason"]
+
+    def usage_text(self):
+        """쓴 양을 사람이 읽을 글로 돌려준다."""
+        parts = []
+        if self.credits:
+            parts.append(f"크레딧 {self.credits:.3f}")
+        if self.context_tokens is not None:
+            parts.append(f"컨텍스트 {self.context_tokens:,}토큰")
+        return ", ".join(parts) or "알 수 없음"
 
     def close(self):
         if self.process is None:
@@ -111,7 +155,7 @@ class AcpClient:
         while True:
             line = self.process.stdout.readline()
             if not line:
-                raise AcpError("kiro-cli가 끝났습니다. 로그인 상태(kiro-cli whoami)를 확인하세요.")
+                raise AcpError(f"{self.name} 에이전트가 끝났습니다. 로그인 상태를 확인하세요(python login.py {self.name}).")
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
@@ -120,7 +164,11 @@ class AcpClient:
                 self._handle(message)
             elif message.get("id") == request_id:
                 if "error" in message:
-                    raise AcpError(f"{method} 실패: {message['error'].get('message')}")
+                    error = message["error"]
+                    detail = error.get("message", "")
+                    if error.get("code") == -32000 or "auth" in detail.lower():
+                        detail += f" (로그인이 필요하면: python login.py {self.name})"
+                    raise AcpError(f"{method} 실패: {detail}")
                 return message["result"]
 
     def _handle(self, message):
@@ -153,7 +201,7 @@ class AcpClient:
                     self.credits += usage.get("value", 0)
             return
 
-        # 알림: 답의 조각, 도구 사용
+        # 알림: 답의 조각, 도구 사용, 컨텍스트 사용량
         if method == "session/update":
             update = params.get("update", {})
             kind = update.get("sessionUpdate")
@@ -163,3 +211,5 @@ class AcpClient:
                     self.on_text(content["text"])
             elif kind in ("tool_call", "tool_call_update"):
                 self.on_tool(update)
+            elif kind == "usage_update" and isinstance(update.get("used"), int):
+                self.context_tokens = update["used"]
