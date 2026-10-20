@@ -22,7 +22,19 @@ import runner  # noqa: E402
 from acp_client import AcpClient  # noqa: E402
 
 FAKE = [sys.executable, str(pathlib.Path(__file__).parent / "fake_agent.py"), "starter"]
+FAKE_LOGIN = str(pathlib.Path(__file__).parent / "fake_login.py")
 CONFIG = {"home_env": "KIRO_HOME", "expect_mode": "starter"}
+LOGIN_AGENTS = {
+    "kiro": {"login": ["kiro-cli", "login"], "login_mode": "terminal"},
+    "claude": {"login": [sys.executable, FAKE_LOGIN, "code"], "login_mode": "code"},
+    "codex": {"login": [sys.executable, FAKE_LOGIN, "device"], "login_mode": "device"},
+}
+
+
+def fake_login_agent(name):
+    if name not in LOGIN_AGENTS:
+        raise dashboard.AcpError("없는 에이전트")
+    return LOGIN_AGENTS[name]
 
 
 def fake_factory(workspace, agent, **callbacks):
@@ -37,7 +49,12 @@ class DashboardTest(unittest.TestCase):
         (self.root / "tasks" / "아침_브리핑.md").write_text(
             "---\nagent: kiro\ntime: 23:59\n---\n오늘 할 일을 정리해 줘\n", encoding="utf-8")
         self.platform = dashboard.Platform(self.root, client_factory=fake_factory,
-                                           status_checker=lambda name: True)
+                                           status_checker=lambda name: True,
+                                           install_checker=lambda agent: True)
+        self.logged_in = set()
+        self.platform.logins = dashboard.Logins(self.platform.log, load_agent=fake_login_agent,
+                                                env_for=lambda name, agent: dict(os.environ),
+                                                is_logged_in=lambda name: name in self.logged_in)
         self.server = dashboard.serve(self.platform, port=0)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -140,6 +157,142 @@ class DashboardTest(unittest.TestCase):
         self.platform.tick(now)
         runs = [e for e in self.platform.log.events if e["type"] == "task" and e["state"] == "running"]
         self.assertEqual(len(runs), 1)
+
+
+    # ---- 플랫폼 안내, 규칙, 보내기 ----
+
+    def write_custom(self, name, text):
+        (self.root / "custom").mkdir(exist_ok=True)
+        (self.root / "custom" / name).write_text(text, encoding="utf-8")
+
+    def ask(self, text):
+        start = len(self.platform.log.events)
+        self.call("POST", "/api/prompt", {"text": text})
+        self.wait_for(lambda e: e["type"] == "done" and e["seq"] > start)
+        return "".join(e["text"] for e in self.platform.log.events[start:] if e["type"] == "text")
+
+    def test_preamble_goes_with_first_prompt_only(self):
+        self.write_custom("업무.md", "- 맡는 업무: 마감 정리\n")
+        self.connect()
+        note = self.wait_for(lambda e: e["type"] == "preamble")
+        self.assertIn("마감 정리", note["text"])
+        self.assertEqual(self.ask("안내"), "받음: 있음")
+        self.assertEqual(self.ask("안내"), "받음: 없음")
+
+    def test_rule_allows_without_card(self):
+        self.write_custom("rules.py", "def decide(agent, tool_call):\n"
+                                      "    return 'allow' if tool_call['rawInput']['command'] == 'date' else 'ask'\n")
+        self.connect()
+        self.assertTrue(self.ask("도구 써 줘").endswith("/ allow-once"))
+        rule = self.wait_for(lambda e: e["type"] == "rule")
+        self.assertEqual((rule["allow"], rule["detail"]), (True, "date"))
+        self.assertFalse([e for e in self.platform.log.events if e["type"] == "permission"])
+
+    def test_broken_rule_falls_back_to_card(self):
+        self.write_custom("rules.py", "def decide(agent, tool_call):\n    return 1 / 0\n")
+        self.connect()
+        self.call("POST", "/api/prompt", {"text": "도구 써 줘"})
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        self.wait_for(lambda e: e["type"] == "rule_error")
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
+        self.wait_for(lambda e: e["type"] == "done")
+
+    def test_unattended_task_refuses_ask_and_delivers(self):
+        self.write_custom("deliver.py", "def deliver(task, path, text):\n"
+                                        "    path.with_suffix('.sent').write_text(task + '|' + text, encoding='utf-8')\n")
+        result = runner.run_task("kiro", "도구 써 줘", name="일", workspace=self.root / "workspace",
+                                 client_factory=fake_factory, custom=self.root / "custom")
+        self.assertIsNone(result.delivery_error)
+        text = result.path.read_text(encoding="utf-8")
+        self.assertIn("- 거절한 도구: Running: date", text)
+        self.assertIn("/ reject", text)
+        self.assertTrue(result.path.with_suffix(".sent").read_text(encoding="utf-8").startswith("일|받음: 도구 써 줘"))
+
+    def test_delivery_error_is_reported(self):
+        self.write_custom("deliver.py", "def deliver(task, path, text):\n    raise RuntimeError('웹훅 실패')\n")
+        self.call("POST", "/api/tasks/%EC%95%84%EC%B9%A8_%EB%B8%8C%EB%A6%AC%ED%95%91/run")
+        done = self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done")
+        self.assertIn("웹훅 실패", done["deliveryError"])
+
+    # ---- 이름과 색, 스킬, 결과함 ----
+
+    def test_brand_and_skills(self):
+        self.write_custom("brand.json", '{"name": "마감지기", "accent": "#123456"}')
+        status, body = self.call("GET", "/api/brand")
+        self.assertEqual((status, body["name"]), (200, "마감지기"))
+        skill = self.root / "workspace" / "skills" / "deadline"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: deadline\ndescription: 마감 표\n---\n", encoding="utf-8")
+        status, body = self.call("GET", "/api/skills")
+        self.assertEqual(body["skills"][0]["name"], "deadline")
+
+    def test_outbox_lists_html_and_serves_it_sandboxed(self):
+        outbox = self.root / "workspace" / "outbox"
+        outbox.mkdir()
+        (outbox / "리포트.html").write_text("<h1>보고</h1>", encoding="utf-8")
+        (outbox / "메모.json").write_text('{"a": 1}', encoding="utf-8")
+        (outbox / "비밀.sh").write_text("echo", encoding="utf-8")
+        status, body = self.call("GET", "/api/outbox")
+        self.assertEqual({f["name"] for f in body["files"]}, {"리포트.html", "메모.json"})
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/outbox/"
+                                    + urllib.request.quote("리포트.html")) as response:
+            self.assertEqual(response.headers["Content-Security-Policy"], "sandbox")
+            self.assertIn("text/html", response.headers["Content-Type"])
+            self.assertEqual(response.read().decode(), "<h1>보고</h1>")
+        status, _ = self.call("GET", "/outbox/" + urllib.request.quote("비밀.sh"))
+        self.assertEqual(status, 404)
+
+    # ---- 로그인 ----
+
+    def login_events(self, agent):
+        return [e for e in self.platform.log.events if e["type"] == "login" and e["agent"] == agent]
+
+    def test_code_login_shows_url_and_takes_code(self):
+        status, _ = self.call("POST", "/api/login/claude")
+        self.assertEqual(status, 202)
+        waiting = self.wait_for(lambda e: e["type"] == "login" and e["state"] == "waiting")
+        self.assertEqual(waiting["url"], "https://example.com/oauth/authorize?code=true&state=AbCd-EfGhI")
+        self.assertIsNone(waiting["userCode"])
+        status, _ = self.call("POST", "/api/login/claude/code", {"code": "good"})
+        self.assertEqual(status, 202)
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "done")
+
+    def test_wrong_code_fails_with_message(self):
+        self.call("POST", "/api/login/claude")
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "waiting")
+        self.call("POST", "/api/login/claude/code", {"code": "bad"})
+        failed = self.wait_for(lambda e: e["type"] == "login" and e["state"] == "failed")
+        self.assertIn("400", failed["message"])
+
+    def test_device_login_shows_code(self):
+        self.call("POST", "/api/login/codex")
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "done")
+        codes = [e.get("userCode") for e in self.login_events("codex") if e["state"] == "waiting"]
+        self.assertIn("ABCD-EFGHI", codes)
+
+    def test_login_can_be_cancelled(self):
+        self.call("POST", "/api/login/claude")
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "waiting")
+        status, _ = self.call("DELETE", "/api/login/claude")
+        self.assertEqual(status, 200)
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "cancelled")
+        status, _ = self.call("POST", "/api/login/claude/code", {"code": "good"})
+        self.assertEqual(status, 404)
+
+    def test_login_is_refused_when_already_logged_in(self):
+        # codex login은 시작하자마자 있던 로그인을 지운다. 취소하면 로그아웃된 상태로 남는다.
+        self.logged_in.add("codex")
+        status, body = self.call("POST", "/api/login/codex")
+        self.assertEqual(status, 409)
+        self.assertIn("로그아웃", body["error"])
+        self.assertFalse(self.login_events("codex"))
+
+    def test_terminal_login_and_logout_are_refused(self):
+        status, body = self.call("POST", "/api/login/kiro")
+        self.assertEqual(status, 400)
+        self.assertIn("kiro-cli login", body["error"])
+        status, _ = self.call("POST", "/api/logout/kiro")
+        self.assertEqual(status, 400)
 
 
 class TaskFileTest(unittest.TestCase):

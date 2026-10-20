@@ -1,4 +1,4 @@
-"""터미널에서 에이전트와 대화한다. 도구 허락은 사람이 y/n으로 정한다.
+"""터미널에서 에이전트와 대화한다. 도구 허락은 custom/rules.py가 정하고, "ask"이면 사람이 y/n으로 정한다.
 
 실행: python chat.py              (Kiro)
       python chat.py claude       (Claude)
@@ -7,6 +7,7 @@
 
 import sys
 
+import custom_loader
 from acp_client import AcpClient, AcpError
 
 
@@ -20,6 +21,12 @@ def show_tool(update):
 
 
 def ask_permission(tool_call):
+    decision, error = custom_loader.decide(sys.argv[1] if len(sys.argv) > 1 else "kiro", tool_call)
+    if error:
+        print(f"\n  [규칙 오류] {error}")
+    if decision != "ask":
+        print(f"\n  [규칙] {tool_call.get('title')} → {decision}")
+        return decision == "allow"
     print(f"\n  [허락 요청] {tool_call.get('title')}")
     answer = input("  허락할까요? [y/N] ").strip().lower()
     return answer == "y"
@@ -28,8 +35,8 @@ def ask_permission(tool_call):
 def main():
     agent = sys.argv[1] if len(sys.argv) > 1 else "kiro"
     try:
-        client = AcpClient("workspace", agent,
-                           on_text=show_text, on_tool=show_tool, on_permission=ask_permission)
+        client = AcpClient("workspace", agent, on_text=show_text, on_tool=show_tool,
+                           on_permission=ask_permission, preamble=custom_loader.preamble())
     except AcpError as error:
         print(error)
         return

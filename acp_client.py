@@ -33,6 +33,11 @@ def sandbox_env(name, agent):
     """샌드박스 홈을 가리키는 환경변수를 만든다. 폴더가 없으면 만든다."""
     home = ROOT / ".homes" / name
     home.mkdir(parents=True, exist_ok=True)
+    # 샌드박스 홈에 둘 설정 파일. 이미 있으면 덮어쓰지 않는다.
+    for file_name, content in agent.get("home_files", {}).items():
+        path = home / file_name
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
     env = dict(os.environ)
     env[agent["home_env"]] = str(home)
     env.update(agent.get("env", {}))
@@ -41,12 +46,13 @@ def sandbox_env(name, agent):
 
 class AcpClient:
     def __init__(self, workspace, agent="kiro", on_text=None, on_tool=None,
-                 on_permission=None, command=None, env=None, config=None):
+                 on_permission=None, preamble=None, command=None, env=None, config=None):
         # workspace: 에이전트가 일하는 폴더.
         # agent: agents.json의 이름(kiro, claude, codex).
         # on_text(text): 답의 조각이 올 때마다 부른다.
         # on_tool(update): 에이전트가 도구를 쓰기 시작하거나 끝낼 때 부른다.
         # on_permission(tool_call) -> bool: 허락이 필요할 때 부른다. 없으면 모두 거절한다.
+        # preamble: 첫 질문 앞에 붙여 보낼 플랫폼 안내. ACP에는 시스템 프롬프트 칸이 없다.
         # command, env, config: 테스트에서 실행 명령과 설정을 바꿀 때만 쓴다.
         self.workspace = os.path.abspath(workspace)
         self.name = agent
@@ -54,6 +60,7 @@ class AcpClient:
         self.on_text = on_text or (lambda text: None)
         self.on_tool = on_tool or (lambda update: None)
         self.on_permission = on_permission or (lambda tool_call: False)
+        self.preamble = preamble
         self.command = command
         self.env = env
         self.process = None
@@ -86,7 +93,7 @@ class AcpClient:
                 "fs": {"readTextFile": False, "writeTextFile": False},
                 "terminal": False,
             },
-            "clientInfo": {"name": "acp-starter", "version": "0.2.0"},
+            "clientInfo": {"name": "acp-starter", "version": "0.3.0"},
         })
         # 2) 대화 하나를 연다.
         params = {"cwd": self.workspace, "mcpServers": []}
@@ -106,6 +113,9 @@ class AcpClient:
 
     def prompt(self, text):
         """질문 하나를 보내고, 에이전트가 이번 차례를 끝낼 때까지 기다린다."""
+        if self.preamble:
+            # 플랫폼 안내는 이 대화의 첫 질문에만 붙인다.
+            text, self.preamble = f"{self.preamble}\n\n{text}", None
         result = self._request("session/prompt", {
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": text}],

@@ -8,6 +8,7 @@
     ],
     "home_env": "KIRO_HOME",
     "expect_mode": "starter",
+    "login_mode": "terminal",
     "login": [
       "kiro-cli",
       "login"
@@ -25,23 +26,29 @@
     ],
     "home_env": "CLAUDE_CONFIG_DIR",
     "safe_mode": "default",
-    "login": [
-      "claude",
-      "auth",
-      "login"
-    ],
-    "status": [
-      "claude",
-      "auth",
-      "status"
-    ],
     "session_meta": {
       "claudeCode": {
         "options": {
           "settingSources": []
         }
       }
-    }
+    },
+    "login_mode": "code",
+    "login": [
+      "claude",
+      "auth",
+      "login"
+    ],
+    "logout": [
+      "claude",
+      "auth",
+      "logout"
+    ],
+    "status": [
+      "claude",
+      "auth",
+      "status"
+    ]
   },
   "codex": {
     "command": [
@@ -54,9 +61,18 @@
       "INITIAL_AGENT_MODE": "read-only"
     },
     "safe_mode": "read-only",
+    "home_files": {
+      "config.toml": "# acp-starter: 플랫폼 안의 Codex가 레포의 AGENTS.md(개발 안내)를 읽지 않게 한다.\nproject_doc_max_bytes = 0\n"
+    },
+    "login_mode": "device",
     "login": [
       "codex",
-      "login"
+      "login",
+      "--device-auth"
+    ],
+    "logout": [
+      "codex",
+      "logout"
     ],
     "status": [
       "codex",

@@ -44,4 +44,14 @@ button.ghost { background: var(--soft); color: var(--accent); }
 .card .actions { display: flex; gap: 6px; }
 #composer { display: flex; gap: 8px; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel); }
 #composer textarea { flex: 1; resize: none; }
+.agent { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 9px; background: var(--soft); color: var(--sub); }
+.badge.ok { color: var(--accent); }
+.badge.need { color: var(--warn); }
+.skill .desc { color: var(--sub); font-size: 12px; margin: 2px 0 6px; }
+.card .code { font-family: Menlo, monospace; font-size: 20px; letter-spacing: 2px; margin: 6px 0; }
+.card a { color: var(--accent); word-break: break-all; }
+.card input { font: inherit; flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+details.msg { cursor: pointer; }
+details.msg pre { white-space: pre-wrap; font-family: Menlo, monospace; font-size: 12px; margin: 6px 0 0; }
 @media (max-width: 760px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }

@@ -7,21 +7,28 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <!-- 이름, 한 줄 소개, 색은 custom/brand.json에서 온다. 배치와 모양은 이 파일과 style.css에서 바꾼다. -->
   <header>
-    <h1>내 에이전트 플랫폼</h1>
-    <p>acp-starter · 이 화면은 <code>app/static/</code>에서, 동작은 <code>dashboard.py</code>에서 고친다</p>
+    <h1 id="brand-name">내 에이전트 플랫폼</h1>
+    <p id="brand-tagline"></p>
   </header>
 
   <main>
     <aside>
       <section>
-        <h2>에이전트</h2>
+        <div class="title-row"><h2>에이전트</h2><button id="reload-agents" class="link">새로 읽기</button></div>
+        <ul id="agents" class="list"></ul>
         <div class="row">
           <select id="agent"></select>
           <button id="connect">연결</button>
         </div>
         <p id="state" class="muted">연결하지 않음</p>
-        <p class="muted small">로그인이 필요하면 터미널에서 <code>python login.py 이름</code></p>
+      </section>
+
+      <section>
+        <h2>스킬</h2>
+        <ul id="skills" class="list"></ul>
+        <p class="muted small"><code>workspace/skills/</code>에 폴더를 더하면 스킬이 늘어난다</p>
       </section>
 
       <section>

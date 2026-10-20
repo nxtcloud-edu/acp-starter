@@ -8,6 +8,7 @@ import os
 import sys
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "starter"
+PREAMBLE_END = "[여기까지 플랫폼 안내. 아래가 사용자의 요청이다]"   # custom_loader.PREAMBLE_END와 같다
 
 
 def send(message):
@@ -38,7 +39,11 @@ for line in sys.stdin:
         send({"id": rid, "result": {}})
     elif method == "session/prompt":
         text = message["params"]["prompt"][0]["text"]
-        if text == "모드":
+        had_preamble = PREAMBLE_END in text
+        text = text.split(PREAMBLE_END)[-1].strip()
+        if text == "안내":
+            text = "있음" if had_preamble else "없음"
+        elif text == "모드":
             text = MODE
         elif text == "메타":
             text = json.dumps(globals().get("META"), ensure_ascii=False)
@@ -50,7 +55,7 @@ for line in sys.stdin:
             update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date"})
             send({"id": "p1", "method": "session/request_permission", "params": {
                 "sessionId": "s1",
-                "toolCall": {"toolCallId": "t1", "title": "Running: date"},
+                "toolCall": {"toolCallId": "t1", "title": "Running: date", "rawInput": {"command": "date"}},
                 "options": [{"optionId": "allow-once", "kind": "allow_once"},
                             {"optionId": "reject", "kind": "reject_once"}]}})
             answer = read()
