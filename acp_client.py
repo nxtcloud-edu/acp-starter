@@ -89,7 +89,11 @@ class AcpClient:
             "clientInfo": {"name": "acp-starter", "version": "0.2.0"},
         })
         # 2) 대화 하나를 연다.
-        result = self._request("session/new", {"cwd": self.workspace, "mcpServers": []})
+        params = {"cwd": self.workspace, "mcpServers": []}
+        if self.config.get("session_meta"):
+            # Claude는 상위 폴더의 CLAUDE.md까지 읽으므로, 설정 파일을 읽지 않게 따로 알린다.
+            params["_meta"] = self.config["session_meta"]
+        result = self._request("session/new", params)
         self.session_id = result["sessionId"]
         expected = self.config.get("expect_mode")
         current = result.get("modes", {}).get("currentModeId")

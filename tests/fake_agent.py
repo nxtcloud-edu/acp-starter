@@ -30,6 +30,7 @@ for line in sys.stdin:
     if method == "initialize":
         send({"id": rid, "result": {"protocolVersion": 1}})
     elif method == "session/new":
+        META = message["params"].get("_meta")
         send({"method": "_kiro.dev/commands/available", "params": {"commands": []}})
         send({"id": rid, "result": {"sessionId": "s1", "modes": {"currentModeId": MODE}}})
     elif method == "session/set_mode":
@@ -39,6 +40,8 @@ for line in sys.stdin:
         text = message["params"]["prompt"][0]["text"]
         if text == "모드":
             text = MODE
+        elif text == "메타":
+            text = json.dumps(globals().get("META"), ensure_ascii=False)
         elif text == "홈":
             text = os.environ.get("FAKE_HOME_CHECK", "")
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "받음: "}})

@@ -76,6 +76,21 @@ class AcpClientTest(unittest.TestCase):
         client.prompt("모드")
         self.assertEqual("".join(chunks), "받음: default")
 
+    def test_session_meta_is_sent_with_new_session(self):
+        chunks = []
+        config = dict(CLAUDE_LIKE, session_meta={"claudeCode": {"options": {"settingSources": []}}})
+        client = self.make(config=config, mode="auto", on_text=chunks.append)
+        client.start()
+        client.prompt("메타")
+        self.assertEqual("".join(chunks), '받음: {"claudeCode": {"options": {"settingSources": []}}}')
+
+    def test_no_meta_without_session_meta(self):
+        chunks = []
+        client = self.make(on_text=chunks.append)
+        client.start()
+        client.prompt("메타")
+        self.assertEqual("".join(chunks), "받음: null")
+
     def test_sandbox_env_points_home_inside_repo(self):
         with tempfile.TemporaryDirectory() as root:
             original = acp_client.ROOT
@@ -100,6 +115,8 @@ class AcpClientTest(unittest.TestCase):
             self.assertIn("command", agent)
         self.assertEqual(acp_client.load_agent("claude")["safe_mode"], "default")
         self.assertEqual(acp_client.load_agent("codex")["safe_mode"], "read-only")
+        self.assertEqual(acp_client.load_agent("claude")["session_meta"],
+                         {"claudeCode": {"options": {"settingSources": []}}})
 
 
 if __name__ == "__main__":

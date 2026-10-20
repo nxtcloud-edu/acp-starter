@@ -1,24 +1,67 @@
 {
   "kiro": {
-    "command": ["kiro-cli", "acp", "--agent", "starter"],
+    "command": [
+      "kiro-cli",
+      "acp",
+      "--agent",
+      "starter"
+    ],
     "home_env": "KIRO_HOME",
     "expect_mode": "starter",
-    "login": ["kiro-cli", "login"],
-    "status": ["kiro-cli", "whoami"]
+    "login": [
+      "kiro-cli",
+      "login"
+    ],
+    "status": [
+      "kiro-cli",
+      "whoami"
+    ]
   },
   "claude": {
-    "command": ["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.94.0"],
+    "command": [
+      "npx",
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.94.0"
+    ],
     "home_env": "CLAUDE_CONFIG_DIR",
     "safe_mode": "default",
-    "login": ["claude", "auth", "login"],
-    "status": ["claude", "auth", "status"]
+    "login": [
+      "claude",
+      "auth",
+      "login"
+    ],
+    "status": [
+      "claude",
+      "auth",
+      "status"
+    ],
+    "session_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": []
+        }
+      }
+    }
   },
   "codex": {
-    "command": ["npx", "-y", "@agentclientprotocol/codex-acp@2.2.2"],
+    "command": [
+      "npx",
+      "-y",
+      "@agentclientprotocol/codex-acp@2.2.2"
+    ],
     "home_env": "CODEX_HOME",
-    "env": {"INITIAL_AGENT_MODE": "read-only"},
+    "env": {
+      "INITIAL_AGENT_MODE": "read-only"
+    },
     "safe_mode": "read-only",
-    "login": ["codex", "login"],
-    "status": ["codex", "login", "status"]
+    "login": [
+      "codex",
+      "login"
+    ],
+    "status": [
+      "codex",
+      "login",
+      "status"
+    ]
   }
 }
