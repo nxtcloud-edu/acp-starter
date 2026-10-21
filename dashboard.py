@@ -133,7 +133,7 @@ class Logins:
                                        stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                        errors="replace", bufsize=1)
             self.running[name] = process
-        self.log.add(type="login", agent=name, state="started", mode=mode)
+        self.log.add(type="login", engine=name, state="started", mode=mode)
         threading.Thread(target=self._watch, args=(name, process, mode), daemon=True).start()
 
     def _watch(self, name, process, mode):
@@ -150,7 +150,7 @@ class Logins:
             if (found_url and not url) or (found_code and not code):
                 url = url or (found_url and found_url.group(0))
                 code = code or (found_code and found_code.group(0))
-                self.log.add(type="login", agent=name, state="waiting", mode=mode, url=url, userCode=code)
+                self.log.add(type="login", engine=name, state="waiting", mode=mode, url=url, userCode=code)
         process.wait()
         timer.cancel()
         for stream in (process.stdin, process.stdout):
@@ -159,11 +159,11 @@ class Logins:
             except (OSError, ValueError):
                 pass
         if process.returncode == 0:
-            self.log.add(type="login", agent=name, state="done", mode=mode)
+            self.log.add(type="login", engine=name, state="done", mode=mode)
         elif process.returncode < 0:
-            self.log.add(type="login", agent=name, state="cancelled", mode=mode)
+            self.log.add(type="login", engine=name, state="cancelled", mode=mode)
         else:
-            self.log.add(type="login", agent=name, state="failed", mode=mode, message=" / ".join(tail))
+            self.log.add(type="login", engine=name, state="failed", mode=mode, message=" / ".join(tail))
 
     def code(self, name, code):
         with self.lock:
@@ -177,7 +177,7 @@ class Logins:
             process.stdin.flush()
         except (OSError, ValueError):
             raise ApiError(404, "진행 중인 로그인이 없습니다.")
-        self.log.add(type="login", agent=name, state="checking")
+        self.log.add(type="login", engine=name, state="checking")
 
     def cancel(self, name):
         with self.lock:
@@ -196,12 +196,16 @@ class Logins:
             raise ApiError(400, f"{command[0]}를 찾지 못했습니다.")
         result = subprocess.run([executable, *command[1:]], env=self.env_for(name, engine),
                                 capture_output=True, text=True, timeout=30)
-        self.log.add(type="login", agent=name, state="logged_out" if result.returncode == 0 else "failed",
+        self.log.add(type="login", engine=name, state="logged_out" if result.returncode == 0 else "failed",
                      message=ANSI.sub("", result.stdout + result.stderr).strip()[-300:])
 
 
 class Platform:
-    """대화 하나, 일 목록, 스케줄, 결과함, 로그인을 맡는다."""
+    """에이전트, 대화 하나, 일 목록, 스케줄, 결과함, 로그인을 맡는다.
+
+    에이전트(custom/agents/)는 플랫폼이 정하고, 엔진(engines.json)은 그 에이전트를 돌리는 부품이다.
+    이 클래스는 엔진 이름을 몰라도 된다. 엔진마다 다른 것은 acp_client.py가 맡는다.
+    """
 
     def __init__(self, root=ROOT, client_factory=AcpClient, status_checker=check_login,
                  install_checker=installed, logins=None):
@@ -215,7 +219,8 @@ class Platform:
         self.logins = logins or Logins(self.log)
         self.lock = threading.Lock()
         self.client = None
-        self.agent = None
+        self.agent = None            # 연결한 에이전트의 이름
+        self.engine = None           # 그 에이전트를 돌리는 엔진
         self.state = "idle"          # idle, starting, ready, busy, error
         self.pending = {}            # 허락을 기다리는 요청: 번호 → {event, allow}
         self.next_permission = 0
@@ -227,7 +232,7 @@ class Platform:
             if task["time"] and now.strftime("%H:%M") >= task["time"]:
                 self.last_run[task["name"]] = now.date()
 
-    # ---- 에이전트와 대화 ----
+    # ---- 엔진 ----
 
     def engines(self):
         configs = json.loads(acp_client.ENGINES_FILE.read_text(encoding="utf-8"))
@@ -242,48 +247,69 @@ class Platform:
             thread.start()
         for thread in threads:
             thread.join()
-        return {"agents": [{"name": name,
-                            "installed": self.install_checker(configs[name]),
-                            "loggedIn": results.get(name),
-                            "loginMode": configs[name].get("login_mode", "terminal"),
-                            "loginCommand": " ".join(configs[name].get("login", [])),
-                            "canLogout": bool(configs[name].get("logout"))} for name in names],
-                "current": self.agent, "state": self.state}
+        return {"engines": [{"name": name,
+                             "installed": self.install_checker(configs[name]),
+                             "loggedIn": results.get(name),
+                             "loginMode": configs[name].get("login_mode", "terminal"),
+                             "loginCommand": " ".join(configs[name].get("login", [])),
+                             "canLogout": bool(configs[name].get("logout"))} for name in names]}
 
-    def connect(self, agent):
+    # ---- 에이전트 ----
+
+    def agents(self):
+        return {"agents": custom_loader.agents(self.custom), "current": self.agent,
+                "engine": self.engine, "state": self.state}
+
+    def save_agent(self, body, create):
         try:
-            acp_client.load_engine(agent)
+            return custom_loader.save_agent(body, self.custom, self.workspace, create=create)
+        except custom_loader.AgentError as error:
+            raise ApiError(error.status, str(error))
+
+    # ---- 대화 ----
+
+    def connect(self, agent, engine=None):
+        """에이전트에 연결한다. engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다."""
+        try:
+            definition = custom_loader.agent(agent, self.custom)
+            engine = engine or definition["engine"]
+            acp_client.load_engine(engine)
+        except custom_loader.AgentError as error:
+            raise ApiError(error.status, str(error))
         except AcpError as error:
             raise ApiError(400, str(error))
         with self.lock:
             if self.state in ("starting", "busy"):
                 raise ApiError(409, "앞의 일이 끝난 뒤에 바꿀 수 있습니다.")
             old, self.client = self.client, None
-            self.agent, self.state = agent, "starting"
+            self.agent, self.engine, self.state = agent, engine, "starting"
         if old:
             old.close()
-        self.log.add(type="status", state="starting", agent=agent)
-        threading.Thread(target=self._start, args=(agent,), daemon=True).start()
+        self.log.add(type="status", state="starting", agent=agent, engine=engine)
+        threading.Thread(target=self._start, args=(definition, engine), daemon=True).start()
 
-    def _start(self, agent):
-        preamble = custom_loader.preamble(self.workspace, self.custom)
-        client = self.client_factory(self.workspace, agent, on_text=self._on_text,
-                                     on_tool=self._on_tool, on_permission=self._ask, preamble=preamble)
+    def _start(self, definition, engine):
+        agent = definition["name"]
+        preamble = custom_loader.preamble(self.workspace, self.custom, definition)
+        client = None
         try:
+            client = self.client_factory(self.workspace, engine, on_text=self._on_text, on_tool=self._on_tool,
+                                         on_permission=self._ask, preamble=preamble)
             client.start()
         except AcpError as error:
-            client.close()
+            if client is not None:
+                client.close()
             with self.lock:
                 self.state = "error"
-            self.log.add(type="status", state="error", agent=agent, message=str(error))
+            self.log.add(type="status", state="error", agent=agent, engine=engine, message=str(error))
             return
         with self.lock:
-            if self.agent != agent:
+            if (self.agent, self.engine) != (agent, engine):
                 client.close()
                 return
             self.client, self.state = client, "ready"
-        self.log.add(type="status", state="ready", agent=agent)
-        self.log.add(type="preamble", agent=agent, text=preamble)
+        self.log.add(type="status", state="ready", agent=agent, engine=engine)
+        self.log.add(type="preamble", agent=agent, engine=engine, text=preamble)
 
     def send(self, text):
         if not text.strip():
@@ -301,7 +327,7 @@ class Platform:
             self.log.add(type="done", stopReason=stop_reason, usage=client.usage_text())
             state = "ready"
         except AcpError as error:
-            self.log.add(type="status", state="error", agent=self.agent, message=str(error))
+            self.log.add(type="status", state="error", agent=self.agent, engine=self.engine, message=str(error))
             state = "error"
         with self.lock:
             if self.client is client:
@@ -359,11 +385,12 @@ class Platform:
         now = datetime.datetime.now()
         self.last_run[name] = now.date()
         self.ran_at[name] = now.strftime("%Y-%m-%d %H:%M")
-        self.log.add(type="task", name=name, state="running", agent=task["agent"])
+        self.log.add(type="task", name=name, state="running", agent=task["agent"], engine=task["engine"])
 
         def work():
             result = runner.run_task(task["agent"], task["prompt"], name=name, workspace=self.workspace,
-                                     client_factory=self.client_factory, custom=self.custom)
+                                     client_factory=self.client_factory, custom=self.custom,
+                                     engine=task["engine"] or None)
             self.log.add(type="task", name=name, state="done", file=result.path.name,
                          deliveryError=result.delivery_error)
 
@@ -454,8 +481,10 @@ def make_handler(platform):
                     return self.send_file(STATIC / parts[1])
                 if len(parts) == 2 and parts[0] == "outbox":
                     return self.send_file(platform.outbox_path(parts[1]), sandbox=True)
-                if parts == ["api", "agents"]:
+                if parts == ["api", "engines"]:
                     return self.send_json(200, platform.engines())
+                if parts == ["api", "agents"]:
+                    return self.send_json(200, platform.agents())
                 if parts == ["api", "brand"]:
                     return self.send_json(200, platform.brand())
                 if parts == ["api", "skills"]:
@@ -464,8 +493,8 @@ def make_handler(platform):
                     after = int(parse_qs(url.query).get("after", ["0"])[0])
                     events = platform.log.since(after)
                     last = events[-1]["seq"] if events else after
-                    return self.send_json(200, {"events": events, "last": last,
-                                                "state": platform.state, "agent": platform.agent})
+                    return self.send_json(200, {"events": events, "last": last, "state": platform.state,
+                                                "agent": platform.agent, "engine": platform.engine})
                 if parts == ["api", "tasks"]:
                     return self.send_json(200, platform.tasks())
                 if parts == ["api", "outbox"]:
@@ -481,8 +510,10 @@ def make_handler(platform):
             try:
                 body = self.read_json()
                 if parts == ["api", "session"]:
-                    platform.connect(str(body.get("agent", "")))
+                    platform.connect(str(body.get("agent", "")), body.get("engine") or None)
                     return self.send_json(202, {"ok": True})
+                if parts == ["api", "agents"]:
+                    return self.send_json(201, platform.save_agent(body, create=True))
                 if parts == ["api", "prompt"]:
                     platform.send(str(body.get("text", "")))
                     return self.send_json(202, {"ok": True})
@@ -501,6 +532,16 @@ def make_handler(platform):
                 if len(parts) == 3 and parts[:2] == ["api", "logout"]:
                     platform.logins.logout(parts[2])
                     return self.send_json(200, {"ok": True})
+                raise ApiError(404, "없는 주소입니다.")
+            except ApiError as error:
+                self.send_json(error.status, {"error": str(error)})
+
+        def do_PUT(self):
+            parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
+            try:
+                body = self.read_json()
+                if len(parts) == 3 and parts[:2] == ["api", "agents"]:
+                    return self.send_json(200, platform.save_agent({**body, "name": parts[2]}, create=False))
                 raise ApiError(404, "없는 주소입니다.")
             except ApiError as error:
                 self.send_json(error.status, {"error": str(error)})

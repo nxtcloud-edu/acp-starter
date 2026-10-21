@@ -54,4 +54,15 @@ button.ghost { background: var(--soft); color: var(--accent); }
 .card input { font: inherit; flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 details.msg { cursor: pointer; }
 details.msg pre { white-space: pre-wrap; font-family: Menlo, monospace; font-size: 12px; margin: 6px 0 0; }
+.agent-item .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.agent-item .head b { font-weight: 600; }
+.agent-item .desc { color: var(--sub); font-size: 12px; margin: 2px 0; }
+.agent-item .row { margin-top: 6px; }
+.agent-item.current { border-color: var(--accent); }
+.form-grid { display: grid; grid-template-columns: 90px 1fr; gap: 8px 10px; align-items: start; margin: 8px 0; }
+.form-grid label { color: var(--sub); font-size: 13px; padding-top: 6px; }
+.form-grid input, .form-grid select, .form-grid textarea { font: inherit; width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: #fff; color: var(--ink); }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-top: 6px; font-size: 13px; }
+.checks label { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); padding: 0; }
+.form-grid .checks input[type=checkbox] { width: auto; margin: 0; }
 @media (max-width: 760px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }

@@ -1,4 +1,4 @@
-"""가짜 에이전트로 대시보드의 API를 확인한다. 실제 에이전트를 부르지 않는다.
+"""가짜 엔진으로 대시보드의 API를 확인한다. 실제 엔진을 부르지 않는다.
 
 실행: python -m unittest discover tests
 """
@@ -37,8 +37,19 @@ def fake_login_engine(name):
     return LOGIN_ENGINES[name]
 
 
-def fake_factory(workspace, agent, **callbacks):
-    return AcpClient(workspace, agent, command=FAKE, config=CONFIG, env=dict(os.environ), **callbacks)
+ENGINES_USED = []   # 가짜 엔진을 만들 때 받은 엔진 이름. 엔진을 바꿔 끼웠는지 확인한다
+
+
+def fake_factory(workspace, engine, **callbacks):
+    ENGINES_USED.append(engine)
+    return AcpClient(workspace, engine, command=FAKE, config=CONFIG, env=dict(os.environ), **callbacks)
+
+
+def write_agent(root, name, engine="kiro", skills="모두", role="역할"):
+    folder = pathlib.Path(root) / "custom" / "agents"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{name}.md").write_text(f"---\nengine: {engine}\ndescription: {name} 설명\nskills: {skills}\n---\n{role}\n",
+                                       encoding="utf-8")
 
 
 class DashboardTest(unittest.TestCase):
@@ -47,10 +58,12 @@ class DashboardTest(unittest.TestCase):
         (self.root / "workspace").mkdir()
         (self.root / "tasks").mkdir()
         (self.root / "tasks" / "아침_브리핑.md").write_text(
-            "---\nagent: kiro\ntime: 23:59\n---\n오늘 할 일을 정리해 줘\n", encoding="utf-8")
+            "---\nagent: 기본_도우미\ntime: 23:59\n---\n오늘 할 일을 정리해 줘\n", encoding="utf-8")
+        write_agent(self.root, "기본_도우미", role="너는 기본 도우미다.")
+        ENGINES_USED.clear()
         self.platform = dashboard.Platform(self.root, client_factory=fake_factory,
                                            status_checker=lambda name: True,
-                                           install_checker=lambda agent: True)
+                                           install_checker=lambda engine: True)
         self.logged_in = set()
         self.platform.logins = dashboard.Logins(self.platform.log, load_engine=fake_login_engine,
                                                 env_for=lambda name, agent: dict(os.environ),
@@ -86,10 +99,11 @@ class DashboardTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail("기다린 사건이 오지 않았습니다.")
 
-    def connect(self):
-        status, _ = self.call("POST", "/api/session", {"agent": "kiro"})
+    def connect(self, agent="기본_도우미", engine=None):
+        start = len(self.platform.log.events)
+        status, _ = self.call("POST", "/api/session", {"agent": agent, "engine": engine})
         self.assertEqual(status, 202)
-        self.wait_for(lambda e: e["type"] == "status" and e["state"] == "ready")
+        return self.wait_for(lambda e: e["type"] == "status" and e["state"] == "ready" and e["seq"] > start)
 
     def text_so_far(self):
         return "".join(e["text"] for e in self.platform.log.events if e["type"] == "text")
@@ -120,8 +134,10 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("error", body)
 
-    def test_unknown_agent_is_refused(self):
+    def test_unknown_agent_or_engine_is_refused(self):
         status, _ = self.call("POST", "/api/session", {"agent": "없는에이전트"})
+        self.assertEqual(status, 404)
+        status, _ = self.call("POST", "/api/session", {"agent": "기본_도우미", "engine": "없는엔진"})
         self.assertEqual(status, 400)
 
     def test_task_runs_and_result_appears_in_outbox(self):
@@ -143,11 +159,11 @@ class DashboardTest(unittest.TestCase):
         status, _ = self.call("GET", "/api/outbox/..%2F..%2Fengines.json")
         self.assertEqual(status, 404)
 
-    def test_agents_lists_login_state(self):
-        status, body = self.call("GET", "/api/agents")
+    def test_engines_list_login_state(self):
+        status, body = self.call("GET", "/api/engines")
         self.assertEqual(status, 200)
-        self.assertEqual({a["name"] for a in body["agents"]}, {"kiro", "claude", "codex"})
-        self.assertTrue(all(a["loggedIn"] is True for a in body["agents"]))
+        self.assertEqual({e["name"] for e in body["engines"]}, {"kiro", "claude", "codex"})
+        self.assertTrue(all(e["loggedIn"] is True for e in body["engines"]))
 
     def test_tick_runs_due_task_once_a_day(self):
         now = datetime.datetime.combine(datetime.date.today(), datetime.time(23, 59))
@@ -198,18 +214,18 @@ class DashboardTest(unittest.TestCase):
         self.wait_for(lambda e: e["type"] == "done")
 
     def test_unattended_task_refuses_ask_and_delivers(self):
-        self.write_custom("deliver.py", "def deliver(task, path, text):\n"
-                                        "    path.with_suffix('.sent').write_text(task + '|' + text, encoding='utf-8')\n")
-        result = runner.run_task("kiro", "도구 써 줘", name="일", workspace=self.root / "workspace",
+        self.write_custom("deliver.py", "def deliver(task, agent, path, text):\n"
+                                        "    path.with_suffix('.sent').write_text(task + '|' + agent + '|' + text, encoding='utf-8')\n")
+        result = runner.run_task("기본_도우미", "도구 써 줘", name="일", workspace=self.root / "workspace",
                                  client_factory=fake_factory, custom=self.root / "custom")
         self.assertIsNone(result.delivery_error)
         text = result.path.read_text(encoding="utf-8")
         self.assertIn("- 거절한 도구: 명령 실행 date", text)
         self.assertIn("/ reject", text)
-        self.assertTrue(result.path.with_suffix(".sent").read_text(encoding="utf-8").startswith("일|받음: 도구 써 줘"))
+        self.assertTrue(result.path.with_suffix(".sent").read_text(encoding="utf-8").startswith("일|기본_도우미|받음: 도구 써 줘"))
 
     def test_delivery_error_is_reported(self):
-        self.write_custom("deliver.py", "def deliver(task, path, text):\n    raise RuntimeError('웹훅 실패')\n")
+        self.write_custom("deliver.py", "def deliver(task, agent, path, text):\n    raise RuntimeError('웹훅 실패')\n")
         self.call("POST", "/api/tasks/%EC%95%84%EC%B9%A8_%EB%B8%8C%EB%A6%AC%ED%95%91/run")
         done = self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done")
         self.assertIn("웹훅 실패", done["deliveryError"])
@@ -245,7 +261,7 @@ class DashboardTest(unittest.TestCase):
     # ---- 로그인 ----
 
     def login_events(self, agent):
-        return [e for e in self.platform.log.events if e["type"] == "login" and e["agent"] == agent]
+        return [e for e in self.platform.log.events if e["type"] == "login" and e["engine"] == agent]
 
     def test_code_login_shows_url_and_takes_code(self):
         status, _ = self.call("POST", "/api/login/claude")
@@ -295,15 +311,71 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(status, 400)
 
 
+    # ---- 에이전트와 엔진 ----
+
+    def test_agent_runs_on_its_engine_or_a_chosen_one(self):
+        ready = self.connect()
+        self.assertEqual((ready["agent"], ready["engine"]), ("기본_도우미", "kiro"))
+        ready = self.connect(engine="codex")
+        self.assertEqual(ready["engine"], "codex")
+        self.assertEqual(ENGINES_USED, ["kiro", "codex"])
+        status, body = self.call("GET", "/api/agents")
+        self.assertEqual((body["current"], body["engine"]), ("기본_도우미", "codex"))
+
+    def test_same_agent_gets_same_preamble_on_any_engine(self):
+        texts = []
+        for engine in ("kiro", "claude", "codex"):
+            self.connect(engine=engine)
+            texts.append([e for e in self.platform.log.events if e["type"] == "preamble"][-1]["text"])
+            self.assertEqual(self.ask("안내"), "받음: 있음")
+        self.assertEqual(len(set(texts)), 1)
+        self.assertIn("너는 기본 도우미다.", texts[0])
+
+    def test_create_and_update_agent(self):
+        body = {"name": "마감_정리", "engine": "claude", "description": "마감 표", "skills": None, "role": "마감만 본다."}
+        status, created = self.call("POST", "/api/agents", body)
+        self.assertEqual((status, created["engine"], created["role"]), (201, "claude", "마감만 본다."))
+        self.assertTrue((self.root / "custom" / "agents" / "마감_정리.md").is_file())
+        status, _ = self.call("POST", "/api/agents", body)
+        self.assertEqual(status, 409)
+        status, updated = self.call("PUT", "/api/agents/" + urllib.request.quote("마감_정리"),
+                                    {"engine": "codex", "description": "바뀜", "skills": [], "role": "새 역할"})
+        self.assertEqual((status, updated["engine"], updated["skills"]), (200, "codex", []))
+        status, body = self.call("GET", "/api/agents")
+        self.assertEqual([a["name"] for a in body["agents"]], ["기본_도우미", "마감_정리"])
+
+    def test_agent_input_is_checked(self):
+        cases = [({"name": "빈 칸", "engine": "kiro"}, 400), ({"name": "a", "engine": "없는엔진"}, 400),
+                 ({"name": "b", "engine": "kiro", "skills": ["없는스킬"]}, 400), ({"name": "README"}, 400)]
+        for body, expected in cases:
+            with self.subTest(body=body):
+                self.assertEqual(self.call("POST", "/api/agents", body)[0], expected)
+        self.assertEqual(self.call("PUT", "/api/agents/" + urllib.request.quote("없음"), {"engine": "kiro"})[0], 404)
+
+    def test_task_can_switch_engine_and_reports_unknown_agent(self):
+        (self.root / "tasks" / "엔진바꿈.md").write_text("---\nagent: 기본_도우미\nengine: claude\n---\n일\n",
+                                                       encoding="utf-8")
+        (self.root / "tasks" / "없는에이전트.md").write_text("---\nagent: 없는이\n---\n일\n", encoding="utf-8")
+        for name in ("엔진바꿈", "없는에이전트"):
+            self.call("POST", f"/api/tasks/{urllib.request.quote(name)}/run")
+            self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done" and e["name"] == name)
+        self.assertEqual(ENGINES_USED, ["claude"])
+        outbox = self.root / "workspace" / "outbox"
+        read = lambda task: next(outbox.glob(f"*_{task}.md")).read_text(encoding="utf-8")
+        self.assertIn("- 엔진: claude", read("엔진바꿈"))
+        self.assertIn("오류: 에이전트 '없는이'이 없습니다", read("없는에이전트"))
+
+
 class TaskFileTest(unittest.TestCase):
     def test_load_tasks_reads_header_and_body(self):
         folder = pathlib.Path(tempfile.mkdtemp())
-        (folder / "a.md").write_text("---\nagent: codex\ntime: 07:30\n---\n할 일\n", encoding="utf-8")
+        (folder / "a.md").write_text("---\nagent: 메모_정리\nengine: codex\ntime: 07:30\n---\n할 일\n", encoding="utf-8")
         (folder / "b.md").write_text("머리 없는 일\n", encoding="utf-8")
         (folder / "c.md").write_text("---\ntime: 7시\n---\n시각이 틀린 일\n", encoding="utf-8")
         tasks = {t["name"]: t for t in runner.load_tasks(folder)}
-        self.assertEqual(tasks["a"], {"name": "a", "agent": "codex", "time": "07:30", "prompt": "할 일"})
-        self.assertEqual(tasks["b"]["agent"], "kiro")
+        self.assertEqual(tasks["a"], {"name": "a", "agent": "메모_정리", "engine": "codex", "time": "07:30",
+                                      "prompt": "할 일"})
+        self.assertEqual((tasks["b"]["agent"], tasks["b"]["engine"]), ("기본_도우미", ""))
         self.assertEqual(tasks["b"]["time"], "")
         self.assertEqual(tasks["c"]["time"], "")
 

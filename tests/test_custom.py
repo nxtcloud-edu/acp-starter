@@ -11,6 +11,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+import acp_client  # noqa: E402
 import custom_loader  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
@@ -72,10 +73,10 @@ class CustomLoaderTest(unittest.TestCase):
         self.assertIn("'yes'", error)
 
     def test_deliver_errors_are_returned_not_raised(self):
-        self.assertIsNone(custom_loader.deliver("일", "a.md", "답", self.custom))
-        self.assertIsNone(custom_loader.deliver("일", "a.md", "답", ROOT / "custom"))
-        self.write("deliver.py", "def deliver(task, path, text):\n    raise RuntimeError('웹훅 실패')\n")
-        self.assertIn("웹훅 실패", custom_loader.deliver("일", "a.md", "답", self.custom))
+        self.assertIsNone(custom_loader.deliver("일", "기본_도우미", "a.md", "답", self.custom))
+        self.assertIsNone(custom_loader.deliver("일", "기본_도우미", "a.md", "답", ROOT / "custom"))
+        self.write("deliver.py", "def deliver(task, agent, path, text):\n    raise RuntimeError('웹훅 실패')\n")
+        self.assertIn("웹훅 실패", custom_loader.deliver("일", "기본_도우미", "a.md", "답", self.custom))
 
     def test_load_env_does_not_override(self):
         env_file = self.custom / ".env"
@@ -84,6 +85,68 @@ class CustomLoaderTest(unittest.TestCase):
         self.addCleanup(lambda: [os.environ.pop(k, None) for k in ("ACP_TEST_A", "ACP_TEST_B")])
         custom_loader.load_env(env_file)
         self.assertEqual((os.environ["ACP_TEST_A"], os.environ["ACP_TEST_B"]), ("원래", "둘"))
+
+    # ---- 에이전트 ----
+
+    def write_agent(self, name, text):
+        (self.custom / "agents").mkdir(exist_ok=True)
+        (self.custom / "agents" / f"{name}.md").write_text(text, encoding="utf-8")
+
+    def make_skill(self, name):
+        folder = self.workspace / "skills" / name
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {name} 설명\n---\n", encoding="utf-8")
+
+    def test_agent_file_fields_and_defaults(self):
+        self.write_agent("가", "---\nengine: codex\ndescription: 설명\nskills: a, b\n---\n<!-- 주석 -->\n역할\n")
+        self.write_agent("나", "역할만 있다\n")
+        self.write_agent("다", "---\nskills: 없음\n---\n")
+        (self.custom / "agents" / "README.md").write_text("안내", encoding="utf-8")
+        found = {a["name"]: a for a in custom_loader.agents(self.custom)}
+        self.assertEqual(set(found), {"가", "나", "다"})
+        self.assertEqual((found["가"]["engine"], found["가"]["skills"], found["가"]["role"]), ("codex", ["a", "b"], "역할"))
+        self.assertEqual((found["나"]["engine"], found["나"]["skills"]), (custom_loader.default_engine(), None))
+        self.assertEqual(found["다"]["skills"], [])
+        with self.assertRaises(custom_loader.AgentError):
+            custom_loader.agent("없는이", self.custom)
+        with self.assertRaises(custom_loader.AgentError):
+            custom_loader.agent("../../agents", self.custom)
+
+    def test_save_agent_checks_and_round_trips(self):
+        self.make_skill("memo")
+        saved = custom_loader.save_agent({"name": "정리", "engine": "claude", "description": "한\n줄",
+                                          "skills": ["memo"], "role": "역할 글"}, self.custom, self.workspace)
+        self.assertEqual((saved["description"], saved["skills"], saved["role"]), ("한 줄", ["memo"], "역할 글"))
+        for bad in ({"name": "정리"}, {"name": "새", "engine": "없음"}, {"name": "새", "skills": ["x"]},
+                    {"name": "공백 이름"}, {"name": "_숨김"}):
+            with self.subTest(bad=bad), self.assertRaises(custom_loader.AgentError):
+                custom_loader.save_agent(bad, self.custom, self.workspace)
+        updated = custom_loader.save_agent({"name": "정리", "skills": [], "role": "바뀜"}, self.custom, self.workspace,
+                                           create=False)
+        self.assertEqual((updated["skills"], updated["role"]), ([], "바뀜"))
+
+    def test_preamble_has_agent_role_and_only_its_skills(self):
+        self.make_skill("memo")
+        self.make_skill("report")
+        self.write_agent("메모", "---\nengine: codex\nskills: memo\n---\n메모만 정리한다.\n")
+        text = custom_loader.preamble(self.workspace, self.custom, custom_loader.agent("메모", self.custom))
+        self.assertIn("## 너의 역할: 메모\n\n메모만 정리한다.", text)
+        self.assertIn("- memo:", text)
+        self.assertNotIn("- report:", text)
+        self.assertNotIn("codex", text)   # 엔진 이름은 안내에 들어가지 않는다
+        self.write_agent("손", "---\nskills: 없음\n---\n손으로만.\n")
+        self.assertNotIn("쓸 수 있는 스킬", custom_loader.preamble(self.workspace, self.custom,
+                                                              custom_loader.agent("손", self.custom)))
+
+    def test_shipped_agents_are_valid(self):
+        found = {a["name"]: a for a in custom_loader.agents()}
+        self.assertIn(custom_loader.DEFAULT_AGENT, found)
+        self.assertIsNone(found[custom_loader.DEFAULT_AGENT]["skills"])
+        self.assertEqual(found["메모_정리"]["skills"], ["memo-to-json"])
+        for agent in found.values():
+            with self.subTest(agent=agent["name"]):
+                self.assertTrue(agent["role"])
+                acp_client.load_engine(agent["engine"])
 
     def test_shipped_skills_point_inside_workspace(self):
         skills = {s["name"]: s for s in custom_loader.skills()}

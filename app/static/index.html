@@ -16,13 +16,15 @@
   <main>
     <aside>
       <section>
-        <div class="title-row"><h2>에이전트</h2><button id="reload-agents" class="link">새로 읽기</button></div>
+        <div class="title-row"><h2>에이전트</h2><button id="new-agent" class="link">+ 새 에이전트</button></div>
         <ul id="agents" class="list"></ul>
-        <div class="row">
-          <select id="agent"></select>
-          <button id="connect">연결</button>
-        </div>
         <p id="state" class="muted">연결하지 않음</p>
+      </section>
+
+      <section>
+        <div class="title-row"><h2>엔진</h2><button id="reload-engines" class="link">새로 읽기</button></div>
+        <ul id="engines" class="list"></ul>
+        <p class="muted small">에이전트를 돌리는 부품이다. 어느 엔진으로 돌려도 같은 에이전트로 일한다</p>
       </section>
 
       <section>

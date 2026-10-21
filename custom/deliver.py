@@ -1,6 +1,7 @@
 """결과를 받는 곳. 일(tasks/)을 한 번 돌려 결과 파일을 만든 뒤 플랫폼이 deliver()를 부른다.
 
 - task: 일의 이름. run_once.py로 바로 맡긴 질문이면 None
+- agent: 일을 맡은 에이전트의 이름(custom/agents/의 파일 이름)
 - path: workspace/outbox/에 만든 결과 파일의 경로(pathlib.Path)
 - text: 에이전트의 답
 
@@ -15,7 +16,7 @@ Kiro Crew에서 비슷한 곳: src/kiro_crew/cron.py(스케줄 결과를 대시�
 """
 
 
-def deliver(task, path, text):
+def deliver(task, agent, path, text):
     pass
 
 
@@ -25,10 +26,10 @@ def deliver(task, path, text):
 # import os
 # import urllib.request
 #
-# def deliver(task, path, text):
+# def deliver(task, agent, path, text):
 #     url = os.environ.get("SLACK_WEBHOOK_URL")
 #     if not url:
 #         return
-#     body = json.dumps({"text": f"*{task or '바로 맡긴 질문'}*\n{text[:3000]}"}).encode("utf-8")
+#     body = json.dumps({"text": f"*{task or '바로 맡긴 질문'}* ({agent})\n{text[:3000]}"}).encode("utf-8")
 #     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
 #     urllib.request.urlopen(request, timeout=10)
