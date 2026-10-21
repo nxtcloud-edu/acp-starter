@@ -34,3 +34,10 @@
 - 근본 원인: Codex는 모델 쪽 웹 검색 도구를 쓴다. Codex 도움말에도 "no per-call approval"이라고 적혀 있다. 이 도구는 ACP의 허락 요청을 거치지 않으므로 플랫폼의 규칙과 사람이 막을 수 없다.
 - 해결: 샌드박스 `config.toml`의 관리 블록에 `web_search = "disabled"`를 넣는다(`engines/codex.py`). 그 뒤 Codex는 `curl` 같은 명령으로 인터넷에 가려 했고, 그 명령은 허락을 물었다. 명령에 든 주소는 `ToolRequest.url`에 넣어서, `request.url` 한 줄로 어느 엔진의 인터넷이든 막을 수 있게 했다.
 - 교훈: 엔진이 허락 없이 쓰는 도구가 있는지 엔진마다 확인한다. 허락을 거치지 않는 도구는 엔진 설정에서 끈다.
+
+## Codex 샌드박스에 개인 스킬, 계정 플러그인, Apps 도구가 실렸다 (2026-10-21)
+
+- 증상: 플랫폼 안의 Codex 세션 기록에 이 컴퓨터의 개인 스킬(`~/.agents/skills`의 computer-use, orca-cli, unity-cli 같은 것)과 ChatGPT 계정의 플러그인(figma, higgsfield 같은 것)이 들어 있었다. 웹 검색을 끈 뒤에도 Codex는 `mcp.codex_apps.search_service.web_run` 도구로 허락 없이 웹 페이지를 가져왔다.
+- 근본 원인: `CODEX_HOME`을 샌드박스로 바꿔도 Codex는 홈 폴더의 `~/.agents/skills`를 따로 읽는다. 계정 플러그인(`remote_plugin`), 플러그인(`plugins`), Apps(`apps`), 기억(`memories`) 기능이 기본으로 켜져 있다. `skip_host_skill_discovery`(개발 중 기능)를 켜도 개인 스킬은 빠지지 않았다.
+- 해결: `engines/codex.py`가 Codex를 실행할 때 `HOME`을 샌드박스 홈으로 바꾼다(npx 캐시는 원래 자리). 관리 블록에 `features.apps`, `features.plugins`, `features.remote_plugin`, `features.memories`를 `false`로 넣는다. 세션 기록에서 개인 스킬, 계정 플러그인, Apps 도구가 0번 나오는 것을 확인했다. Kiro와 Claude의 기록에는 개인 스킬이 없었다.
+- 교훈: 샌드박스가 깨끗한지는 설정 폴더 하나로 판단하지 않는다. 엔진이 읽는 모든 자리(홈 폴더, 계정, 기능 플래그)를 세션 기록으로 확인한다.

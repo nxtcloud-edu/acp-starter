@@ -46,6 +46,20 @@ class SafetyTest(unittest.TestCase):
         self.assertIn("project_doc_max_bytes = 0", config)
         self.assertIn('web_search = "disabled"', config)   # 허락을 묻지 않는 웹 검색을 끈다
 
+    def test_codex_sees_only_what_the_platform_gives(self):
+        # 2026-10-21: Codex가 ~/.agents/skills의 개인 스킬과 계정 플러그인, Apps 웹 도구, 자기 기억을 썼다.
+        root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        with mock.patch.object(base, "HOMES", root):
+            env = CodexEngine.sandbox_env()
+        config = (root / "codex" / "config.toml").read_text(encoding="utf-8")
+        for line in ("features.apps = false", "features.plugins = false",
+                     "features.remote_plugin = false", "features.memories = false"):
+            with self.subTest(line=line):
+                self.assertIn(line, config)
+        self.assertEqual(env["HOME"], str(root / "codex"))           # ~/.agents/skills를 찾지 못하게
+        self.assertTrue(env["npm_config_cache"].endswith(".npm"))   # 어댑터는 원래 캐시에서
+
     def test_claude_reads_no_setting_files(self):
         meta = ClaudeEngine(ROOT).session_meta()
         self.assertEqual(meta["claudeCode"]["options"]["settingSources"], [])
