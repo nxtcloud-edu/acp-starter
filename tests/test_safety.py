@@ -42,7 +42,9 @@ class SafetyTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root)
         with mock.patch.object(base, "HOMES", root):
             CodexEngine.sandbox_env()
-        self.assertIn("project_doc_max_bytes = 0", (root / "codex" / "config.toml").read_text(encoding="utf-8"))
+        config = (root / "codex" / "config.toml").read_text(encoding="utf-8")
+        self.assertIn("project_doc_max_bytes = 0", config)
+        self.assertIn('web_search = "disabled"', config)   # 허락을 묻지 않는 웹 검색을 끈다
 
     def test_claude_reads_no_setting_files(self):
         meta = ClaudeEngine(ROOT).session_meta()

@@ -77,6 +77,18 @@ class ToolRequestTest(unittest.TestCase):
                          "python3 skills/x.py --out outbox/a.json <<'JSON'\n{\n  \"메모 날짜\": null\n}\nJSON")
         self.assertTrue(request.command.startswith("python3 skills/"))
 
+    def test_internet_has_a_url_whatever_the_tool(self):
+        kiro_curl = {"toolCallId": "k4", "title": "Running: curl -s https://example.com",
+                     "rawInput": {"command": "curl -s https://example.com"}}
+        codex_curl = {"toolCallId": "x3", "title": "Run command", "kind": "execute",
+                      "rawInput": {"command": '"curl -L --fail --max-time 20 https://example.com"', "cwd": WS}}
+        cases = [tool_request(KIRO_FETCH, "kiro", WS, known_kind="read"), tool_request(CLAUDE_FETCH, "claude", WS),
+                 tool_request(kiro_curl, "kiro", WS, known_kind="execute"), tool_request(codex_curl, "codex", WS)]
+        for request in cases:
+            with self.subTest(engine=request.engine, kind=request.kind):
+                self.assertEqual(request.url, "https://example.com")
+        self.assertEqual(tool_request(CLAUDE_SHELL, "claude", WS).url, "")
+
     def test_kind_is_guessed_when_missing(self):
         self.assertEqual(tool_request(KIRO_SHELL, "kiro", WS).kind, "execute")
         self.assertEqual(tool_request(KIRO_WRITE, "kiro", WS).kind, "edit")

@@ -13,7 +13,7 @@ request는 엔진(Kiro, Claude, Codex)과 상관없이 같은 꼴이다. 그래�
     request.kind     종류: "execute"(명령 실행), "edit"(파일 쓰기), "fetch"(인터넷), "delete", "move", "read", "other"
     request.command  실행할 명령(kind가 "execute"일 때). 예: "python3 skills/memo-to-json/scripts/save_memo.py --out outbox/a.json"
     request.path     다룰 파일. 작업 폴더 안이면 작업 폴더 기준. 예: "outbox/a.json"
-    request.url      가져올 주소(kind가 "fetch"일 때)
+    request.url      인터넷 주소. 웹 가져오기 도구든 명령(curl, wget)이든 인터넷에 가면 여기에 주소가 있다
     request.engine   요청을 보낸 엔진. 엔진마다 다르게 하고 싶을 때만 쓴다
     request.raw      엔진이 보낸 원래 모양
 agent는 요청을 보낸 에이전트의 이름이다(custom/agents/의 파일 이름).
@@ -38,10 +38,11 @@ def decide(agent, request):
 #     return "ask"
 #
 # 예 2) outbox/ 안에 쓰는 파일은 허락하고, 인터넷은 묻지도 않고 거절한다.
+#     request.url은 엔진과 도구가 달라도 인터넷 주소가 들어 있어서, 이 한 줄로 모든 엔진의 인터넷을 막는다.
 #
 # def decide(agent, request):
 #     if request.kind == "edit" and request.path.startswith("outbox/"):
 #         return "allow"
-#     if request.kind == "fetch":
+#     if request.url:
 #         return "deny"
 #     return "ask"

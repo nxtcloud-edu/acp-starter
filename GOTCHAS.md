@@ -27,3 +27,10 @@
 - 근본 원인: codex-acp 2.2.2의 거절 선택지는 `decline`("No, continue without running it")과 `cancel`("No, and tell Codex what to do differently") 둘이다. 그런데 명령 실행 요청과 파일 고치기 요청에는 `cancel`만 준다. 플랫폼은 종류(`reject_once`)로 골랐으므로 `cancel`을 골랐고, `cancel`은 차례를 멈춘다.
 - 해결: `engines/codex.py`가 `decline`이 있으면 먼저 고른다. 없어서 차례가 멈추면 `engines/base.py`의 `send`가 거절된 도구를 알리고 "그 도구 없이 이어서 하라"고 한 번 더 보낸다. 플랫폼은 그 사실을 알림(`notice`)으로 남긴다.
 - 교훈: 같은 이름의 선택(거절)이 엔진마다 다른 결과를 낼 수 있다. 엔진의 차이는 엔진 층에서 맞추고, 플랫폼이 받는 결과(TurnResult)는 같은 꼴로 만든다.
+
+## Codex는 허락을 묻지 않고 웹을 검색했다 (2026-10-21)
+
+- 증상: "인터넷은 거절" 규칙을 걸었는데 Codex가 웹 페이지의 제목을 가져왔다. 허락 요청은 오지 않았고, 쓴 도구에는 "Web search"만 있었다.
+- 근본 원인: Codex는 모델 쪽 웹 검색 도구를 쓴다. Codex 도움말에도 "no per-call approval"이라고 적혀 있다. 이 도구는 ACP의 허락 요청을 거치지 않으므로 플랫폼의 규칙과 사람이 막을 수 없다.
+- 해결: 샌드박스 `config.toml`의 관리 블록에 `web_search = "disabled"`를 넣는다(`engines/codex.py`). 그 뒤 Codex는 `curl` 같은 명령으로 인터넷에 가려 했고, 그 명령은 허락을 물었다. 명령에 든 주소는 `ToolRequest.url`에 넣어서, `request.url` 한 줄로 어느 엔진의 인터넷이든 막을 수 있게 했다.
+- 교훈: 엔진이 허락 없이 쓰는 도구가 있는지 엔진마다 확인한다. 허락을 거치지 않는 도구는 엔진 설정에서 끈다.

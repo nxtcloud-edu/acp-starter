@@ -12,6 +12,7 @@
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -34,6 +35,7 @@ KIND_LABELS = {
 ACP_STOPS = {"end_turn": "done", "max_tokens": "limit", "max_turn_requests": "limit",
              "refusal": "refusal", "cancelled": "cancelled"}
 STOP_LABELS = {"done": "끝", "limit": "한도에 닿아 멈춤", "refusal": "엔진이 답하지 않기로 함", "cancelled": "멈춤"}
+URL = re.compile(r"https?://[^\s'\"<>|;)]+")
 
 
 class ToolRequest:
@@ -43,7 +45,8 @@ class ToolRequest:
     kind:    종류(KIND_LABELS의 왼쪽 값). 예: "execute", "edit", "fetch"
     command: 실행할 명령(kind가 "execute"일 때만)
     path:    다룰 파일. 작업 폴더 안이면 작업 폴더 기준 경로(예: "outbox/a.json")
-    url:     가져올 주소(kind가 "fetch"일 때)
+    url:     인터넷 주소. 웹 가져오기 도구의 주소이거나, 명령에 든 주소(예: curl https://...)
+             어느 엔진, 어느 도구로 인터넷에 가든 여기에 주소가 있다
     title:   엔진이 붙인 제목. 엔진마다 다르다
     raw:     엔진이 보낸 원래 모양(dict)
     """
@@ -235,6 +238,9 @@ class AcpEngine:
             else:
                 kind = "other"
         command = self.command_text(command_value) if kind == "execute" else ""
+        if command and not url:
+            found = URL.search(command)
+            url = found.group(0) if found else ""
         if path:
             try:
                 path = pathlib.Path(path).resolve().relative_to(pathlib.Path(self.workspace).resolve()).as_posix()

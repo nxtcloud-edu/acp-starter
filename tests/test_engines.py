@@ -162,9 +162,21 @@ class EngineHomeTest(unittest.TestCase):
         data = json.loads(settings.read_text(encoding="utf-8"))
         self.assertEqual(data, {"chat.defaultModel": "x", "chat.disableInheritingDefaultResources": True})
 
-    def test_codex_home_gets_config(self):
+    def test_codex_home_gets_managed_config_on_top(self):
+        config = self.root / "codex" / "config.toml"
+        config.parent.mkdir(parents=True)
+        # 옛 판이 남긴 줄(같은 키)과 사용자가 쓴 줄이 섞인 파일
+        config.write_text('# acp-starter: 옛 안내\nproject_doc_max_bytes = 0\nmodel = "gpt-x"\n'
+                          '[mcp_servers.x]\nweb_search = "keep"\n', encoding="utf-8")
         CodexEngine.sandbox_env()
-        self.assertIn("project_doc_max_bytes = 0", (self.root / "codex" / "config.toml").read_text(encoding="utf-8"))
+        first = config.read_text(encoding="utf-8")
+        CodexEngine.sandbox_env()
+        self.assertEqual(config.read_text(encoding="utf-8"), first)      # 몇 번을 실행해도 같다
+        lines = first.splitlines()
+        self.assertEqual(lines[1:3], ["project_doc_max_bytes = 0", 'web_search = "disabled"'])
+        self.assertEqual([l for l in lines if l.startswith("project_doc_max_bytes")], ["project_doc_max_bytes = 0"])
+        self.assertIn('model = "gpt-x"', lines)
+        self.assertEqual(lines[-2:], ["[mcp_servers.x]", 'web_search = "keep"'])
 
 
 class EngineRegistryTest(unittest.TestCase):
