@@ -223,6 +223,8 @@ class Platform:
         self.engine = None           # 그 에이전트를 돌리는 엔진
         self.state = "idle"          # idle, starting, ready, busy, error
         self.pending = {}            # 허락을 기다리는 요청: 번호 → {event, allow}
+        self.history = {}            # 에이전트 이름 → 앞의 대화 [{role, text}]. 대시보드를 끄면 사라진다
+        self.turn = []               # 지금 차례의 답 조각
         self.next_permission = 0
         self.last_run = {}           # 스케줄 판단용: 일 이름 → 오늘 돌렸거나 건너뛴 날짜
         self.ran_at = {}             # 화면 표시용: 일 이름 → 실제로 돌린 시각
@@ -257,8 +259,10 @@ class Platform:
     # ---- 에이전트 ----
 
     def agents(self):
-        return {"agents": custom_loader.agents(self.custom), "current": self.agent,
-                "engine": self.engine, "state": self.state}
+        items = custom_loader.agents(self.custom)
+        for item in items:
+            item["history"] = len(self.history.get(item["name"], []))
+        return {"agents": items, "current": self.agent, "engine": self.engine, "state": self.state}
 
     def save_agent(self, body, create):
         try:
@@ -268,8 +272,11 @@ class Platform:
 
     # ---- 대화 ----
 
-    def connect(self, agent, engine=None):
-        """에이전트에 연결한다. engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다."""
+    def connect(self, agent, engine=None, fresh=False):
+        """에이전트에 연결한다. engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다.
+
+        플랫폼이 가진 그 에이전트의 앞의 대화를 새 세션에 다시 보낸다. fresh=True이면 지우고 새로 시작한다.
+        """
         try:
             definition = custom_loader.agent(agent, self.custom)
             engine = engine or definition["engine"]
@@ -283,14 +290,17 @@ class Platform:
                 raise ApiError(409, "앞의 일이 끝난 뒤에 바꿀 수 있습니다.")
             old, self.client = self.client, None
             self.agent, self.engine, self.state = agent, engine, "starting"
+            if fresh:
+                self.history.pop(agent, None)
+            history = list(self.history.get(agent, []))
         if old:
             old.close()
         self.log.add(type="status", state="starting", agent=agent, engine=engine)
-        threading.Thread(target=self._start, args=(definition, engine), daemon=True).start()
+        threading.Thread(target=self._start, args=(definition, engine, history), daemon=True).start()
 
-    def _start(self, definition, engine):
+    def _start(self, definition, engine, history):
         agent = definition["name"]
-        preamble = custom_loader.preamble(self.workspace, self.custom, definition)
+        preamble = custom_loader.preamble(self.workspace, self.custom, definition, history)
         client = None
         try:
             client = self.client_factory(self.workspace, engine, on_text=self._on_text, on_tool=self._on_tool,
@@ -309,7 +319,7 @@ class Platform:
                 return
             self.client, self.state = client, "ready"
         self.log.add(type="status", state="ready", agent=agent, engine=engine)
-        self.log.add(type="preamble", agent=agent, engine=engine, text=preamble)
+        self.log.add(type="preamble", agent=agent, engine=engine, text=preamble, history=len(history))
 
     def send(self, text):
         if not text.strip():
@@ -318,10 +328,13 @@ class Platform:
             if self.state != "ready":
                 raise ApiError(409, "에이전트가 준비되지 않았거나 앞의 답을 쓰는 중입니다.")
             self.state, client = "busy", self.client
+            self.history.setdefault(self.agent, []).append({"role": "user", "text": text})
+            self.turn = []
         self.log.add(type="user", text=text)
         threading.Thread(target=self._prompt, args=(client, text), daemon=True).start()
 
     def _prompt(self, client, text):
+        agent = self.agent
         try:
             stop_reason = client.prompt(text)
             self.log.add(type="done", stopReason=stop_reason, usage=client.usage_text())
@@ -330,10 +343,15 @@ class Platform:
             self.log.add(type="status", state="error", agent=self.agent, engine=self.engine, message=str(error))
             state = "error"
         with self.lock:
+            answer = "".join(self.turn).strip()
+            if answer:
+                self.history.setdefault(agent, []).append({"role": "agent", "text": answer})
+            self.turn = []
             if self.client is client:
                 self.state = state
 
     def _on_text(self, text):
+        self.turn.append(text)
         self.log.add(type="text", text=text)
 
     def _on_tool(self, request):
@@ -510,7 +528,8 @@ def make_handler(platform):
             try:
                 body = self.read_json()
                 if parts == ["api", "session"]:
-                    platform.connect(str(body.get("agent", "")), body.get("engine") or None)
+                    platform.connect(str(body.get("agent", "")), body.get("engine") or None,
+                                     fresh=body.get("fresh") is True)
                     return self.send_json(202, {"ok": True})
                 if parts == ["api", "agents"]:
                     return self.send_json(201, platform.save_agent(body, create=True))

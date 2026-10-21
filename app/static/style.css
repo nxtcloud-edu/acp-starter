@@ -44,6 +44,7 @@ button.ghost { background: var(--soft); color: var(--accent); }
 .card .actions { display: flex; gap: 6px; }
 #composer { display: flex; gap: 8px; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel); }
 #composer textarea { flex: 1; resize: none; }
+.composer-buttons { display: flex; flex-direction: column; gap: 6px; }
 .agent { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .badge { font-size: 11px; padding: 1px 6px; border-radius: 9px; background: var(--soft); color: var(--sub); }
 .badge.ok { color: var(--accent); }

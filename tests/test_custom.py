@@ -138,6 +138,24 @@ class CustomLoaderTest(unittest.TestCase):
         self.assertNotIn("쓸 수 있는 스킬", custom_loader.preamble(self.workspace, self.custom,
                                                               custom_loader.agent("손", self.custom)))
 
+    def test_history_is_cut_from_the_oldest(self):
+        history = [{"role": "user" if i % 2 == 0 else "agent", "text": f"말{i} " + "가" * 10} for i in range(30)]
+        text = custom_loader.history_text(history)
+        self.assertNotIn("말17 ", text)
+        self.assertIn("[사용자] 말18 ", text)
+        self.assertIn("[에이전트] 말29 ", text)
+        long = custom_loader.history_text([{"role": "agent", "text": "나" * 5000}])
+        self.assertTrue(long.endswith("…(줄임)"))
+        self.assertLessEqual(len(long), custom_loader.MESSAGE_CHARS + 20)
+        many = custom_loader.history_text([{"role": "user", "text": "다" * 1400}] * 12)
+        self.assertLessEqual(len(many), custom_loader.HISTORY_CHARS + 30)
+
+    def test_preamble_carries_history_before_the_end_line(self):
+        text = custom_loader.preamble(self.workspace, self.custom,
+                                      history=[{"role": "user", "text": "앞의 질문"}])
+        self.assertIn("## 지금까지의 대화", text)
+        self.assertLess(text.index("[사용자] 앞의 질문"), text.index(custom_loader.PREAMBLE_END))
+
     def test_shipped_agents_are_valid(self):
         found = {a["name"]: a for a in custom_loader.agents()}
         self.assertIn(custom_loader.DEFAULT_AGENT, found)

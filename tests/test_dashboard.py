@@ -99,9 +99,9 @@ class DashboardTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail("기다린 사건이 오지 않았습니다.")
 
-    def connect(self, agent="기본_도우미", engine=None):
+    def connect(self, agent="기본_도우미", engine=None, fresh=False):
         start = len(self.platform.log.events)
-        status, _ = self.call("POST", "/api/session", {"agent": agent, "engine": engine})
+        status, _ = self.call("POST", "/api/session", {"agent": agent, "engine": engine, "fresh": fresh})
         self.assertEqual(status, 202)
         return self.wait_for(lambda e: e["type"] == "status" and e["state"] == "ready" and e["seq"] > start)
 
@@ -325,7 +325,7 @@ class DashboardTest(unittest.TestCase):
     def test_same_agent_gets_same_preamble_on_any_engine(self):
         texts = []
         for engine in ("kiro", "claude", "codex"):
-            self.connect(engine=engine)
+            self.connect(engine=engine, fresh=True)   # 앞의 대화가 없을 때 안내는 엔진과 상관없이 같다
             texts.append([e for e in self.platform.log.events if e["type"] == "preamble"][-1]["text"])
             self.assertEqual(self.ask("안내"), "받음: 있음")
         self.assertEqual(len(set(texts)), 1)
@@ -364,6 +364,40 @@ class DashboardTest(unittest.TestCase):
         read = lambda task: next(outbox.glob(f"*_{task}.md")).read_text(encoding="utf-8")
         self.assertIn("- 엔진: claude", read("엔진바꿈"))
         self.assertIn("오류: 에이전트 '없는이'이 없습니다", read("없는에이전트"))
+
+
+    # ---- 대화 이어 가기 ----
+
+    def last_preamble(self):
+        return [e for e in self.platform.log.events if e["type"] == "preamble"][-1]
+
+    def test_conversation_continues_on_another_engine(self):
+        self.connect(engine="kiro")
+        self.assertEqual(self.ask("발표안내.md를 기억해"), "받음: 발표안내.md를 기억해")
+        self.connect(engine="claude")
+        note = self.last_preamble()
+        self.assertEqual(note["history"], 2)
+        self.assertIn("[사용자] 발표안내.md를 기억해", note["text"])
+        self.assertIn("[에이전트] 받음: 발표안내.md를 기억해", note["text"])
+        self.assertEqual(ENGINES_USED, ["kiro", "claude"])
+        status, body = self.call("GET", "/api/agents")
+        self.assertEqual(body["agents"][0]["history"], 2)
+
+    def test_fresh_conversation_drops_history(self):
+        self.connect()
+        self.ask("하나")
+        start = len(self.platform.log.events)
+        self.call("POST", "/api/session", {"agent": "기본_도우미", "fresh": True})
+        self.wait_for(lambda e: e["type"] == "preamble" and e["seq"] > start)
+        self.assertEqual(self.last_preamble()["history"], 0)
+        self.assertNotIn("지금까지의 대화", self.last_preamble()["text"])
+
+    def test_history_is_kept_per_agent(self):
+        write_agent(self.root, "메모_정리", role="메모만.")
+        self.connect()
+        self.ask("기본에게")
+        self.connect(agent="메모_정리")
+        self.assertEqual(self.last_preamble()["history"], 0)
 
 
 class TaskFileTest(unittest.TestCase):

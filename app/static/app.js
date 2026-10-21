@@ -179,7 +179,8 @@ async function loadAgents() {
     select.value = a.name === data.current && data.engine ? data.engine : a.engine;
     const row = el("div", "row");
     row.append(select, button("연결", () => connect(a.name, select.value)));
-    li.append(head, el("div", "desc", a.description || ""), el("div", "desc", skillsText(a.skills)), row);
+    const memory = a.history ? ` · 플랫폼이 가진 대화 ${a.history}개` : "";
+    li.append(head, el("div", "desc", a.description || ""), el("div", "desc", skillsText(a.skills) + memory), row);
     $("agents").appendChild(li);
   }
   if (!data.agents.length) $("agents").innerHTML = '<li class="meta">에이전트가 없다. "+ 새 에이전트"로 만든다</li>';
@@ -288,6 +289,15 @@ $("composer").onsubmit = async (event) => {
   catch (e) { report(e); }
 };
 
+// 새 대화: 지금 에이전트의 앞의 대화를 지우고 같은 엔진으로 다시 연결한다.
+$("fresh").onclick = async () => {
+  try {
+    const data = await api("GET", "/api/agents");
+    if (!data.current) { add("note", "먼저 에이전트에 연결한다."); return; }
+    await api("POST", "/api/session", { agent: data.current, engine: data.engine, fresh: true });
+  } catch (e) { report(e); }
+};
+
 $("text").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -310,7 +320,8 @@ function permissionCard(event) {
 
 function preambleNote(event) {
   const details = el("details", "msg note");
-  details.append(el("summary", "", `플랫폼이 보낸 안내 · ${event.agent} (첫 질문 앞에 붙는다 · 업무, 역할, 스킬)`),
+  const carried = event.history ? ` · 앞의 대화 ${event.history}개를 이어 보냄` : "";
+  details.append(el("summary", "", `플랫폼이 보낸 안내 · ${event.agent}${carried} (첫 질문 앞에 붙는다 · 업무, 역할, 스킬)`),
                  el("pre", "", event.text));
   $("log").appendChild(details);
   scrollDown();

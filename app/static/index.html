@@ -49,7 +49,10 @@
       <div id="log"></div>
       <form id="composer">
         <textarea id="text" rows="2" placeholder="에이전트에게 맡길 일을 적는다. Enter로 보내고, Shift+Enter로 줄을 바꾼다."></textarea>
-        <button type="submit">보내기</button>
+        <div class="composer-buttons">
+          <button type="submit">보내기</button>
+          <button type="button" id="fresh" class="ghost" title="이 에이전트의 앞의 대화를 지우고 새 세션으로 다시 연결한다">새 대화</button>
+        </div>
       </form>
     </section>
   </main>

@@ -25,6 +25,9 @@ PREAMBLE_END = "[여기까지 플랫폼 안내. 아래가 사용자의 요청이
 DEFAULT_BRAND = {"name": "내 에이전트 플랫폼", "tagline": "", "accent": "#087F87"}
 DEFAULT_AGENT = "기본_도우미"
 DECISIONS = ("allow", "deny", "ask")
+HISTORY_MESSAGES = 12          # 다시 연결할 때 보내는 앞의 대화: 최근 메시지 수
+HISTORY_CHARS = 8000           # 그 대화의 전체 글자 수 상한(오래된 것부터 뺀다)
+MESSAGE_CHARS = 1500           # 메시지 하나의 글자 수 상한
 SAFE_NAME = re.compile(r"[^\W_][\w.\-]*")   # 첫 글자는 글자나 숫자(한글 포함)
 ALL_SKILLS, NO_SKILLS = "모두", "없음"
 
@@ -174,11 +177,26 @@ def business(custom=CUSTOM):
         return ""
 
 
-def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None):
+def history_text(history):
+    """플랫폼이 가진 앞의 대화를 안내에 넣을 글로 만든다. 길면 오래된 것부터 뺀다."""
+    names = {"user": "사용자", "agent": "에이전트"}
+    lines = []
+    for message in (history or [])[-HISTORY_MESSAGES:]:
+        text = message["text"].strip()
+        if len(text) > MESSAGE_CHARS:
+            text = text[:MESSAGE_CHARS] + " …(줄임)"
+        lines.append(f"[{names.get(message['role'], message['role'])}] {text}")
+    while lines and sum(len(line) for line in lines) > HISTORY_CHARS:
+        lines.pop(0)
+    return "\n\n".join(lines)
+
+
+def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None, history=None):
     """대화를 시작할 때 에이전트에게 보내는 플랫폼 안내를 만든다.
 
     ACP에는 시스템 프롬프트 칸이 없다. 그래서 플랫폼은 이 글을 첫 질문 앞에 붙인다.
     안내에는 엔진 이름이 들어가지 않는다. 같은 에이전트는 어느 엔진으로 돌려도 같은 안내를 받는다.
+    history가 있으면 앞의 대화를 넣는다. 대화 기억이 엔진이 아니라 플랫폼에 있으므로 엔진을 바꿔도 이어진다.
     """
     lines = ["[플랫폼 안내] 이 플랫폼이 대화를 시작할 때 보내는 글이다.", ""]
     lines += ["## 업무", "", business(custom) or "아직 정하지 않았다. 사용자의 요청에 따른다.", ""]
@@ -192,7 +210,13 @@ def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None):
                   "요청이 아래 스킬에 맞으면, 먼저 그 SKILL.md를 읽고 적힌 절차를 따른다. 경로는 작업 폴더 기준이다.", ""]
         lines += [f"- {s['name']}: {s['description']} (`{s['path']}`)" for s in found]
         lines.append("")
-    lines += ["## 결과 파일", "", "만든 결과 파일은 `outbox/`에 저장한다.", "", PREAMBLE_END]
+    lines += ["## 결과 파일", "", "만든 결과 파일은 `outbox/`에 저장한다.", ""]
+    past = history_text(history)
+    if past:
+        lines += ["## 지금까지의 대화", "",
+                  "아래는 이 에이전트와 사용자가 앞서 나눈 대화다. 다른 엔진에서 나눈 것일 수 있다. 이 대화에 이어서 답한다.", "",
+                  past, ""]
+    lines.append(PREAMBLE_END)
     return "\n".join(lines)
 
 
