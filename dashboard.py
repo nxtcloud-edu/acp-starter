@@ -7,12 +7,14 @@
 API의 목록은 README의 '대시보드 API' 절에 있다.
 대시보드가 켜져 있는 동안 tasks/의 일을 정해진 시각에 돌린다.
 custom/의 파일(이름과 색, 업무, 허락 규칙, 결과 보내기)은 custom_loader.py가 읽어 잇는다.
+대화 기록은 conversations.py가 conversations/에 파일로 남긴다.
 """
 
 import datetime
 import json
 import pathlib
 import re
+import secrets
 import shutil
 import sys
 import subprocess
@@ -24,6 +26,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import custom_loader
 import engines
 import runner
+from conversations import ConversationError, ConversationStore
 from engines import EngineError
 
 ROOT = pathlib.Path(__file__).parent
@@ -52,12 +55,22 @@ def check_login(name):
     return engines.get(name).check_login()
 
 
+def tool_line(request):
+    """대화 기록에 남길 도구 한 줄. 예: "명령 실행 python3 skills/memo-to-json/scripts/save_memo.py"."""
+    first = request.detail.splitlines()[0][:200] if request.detail else ""
+    return f"{request.label} {first}".strip()
+
+
 class EventLog:
-    """화면이 가져가는 사건 기록. 화면은 마지막으로 받은 번호 뒤의 사건만 묻는다."""
+    """화면이 가져가는 사건 기록. 화면은 마지막으로 받은 번호 뒤의 사건만 묻는다.
+
+    epoch는 서버를 켤 때마다 바뀐다. 화면은 epoch가 바뀌면 처음부터 다시 읽는다.
+    """
 
     def __init__(self):
         self.events = []
         self.cond = threading.Condition()
+        self.epoch = secrets.token_hex(4)
 
     def add(self, **event):
         with self.cond:
@@ -65,10 +78,12 @@ class EventLog:
             event["at"] = datetime.datetime.now().strftime("%H:%M:%S")
             self.events.append(event)
             self.cond.notify_all()
+            return event
 
     def since(self, after, timeout=15):
+        """그 번호 뒤의 사건. 새 사건이 없으면 기다린다. 서버를 다시 켜서 번호가 앞서 있으면 바로 돌려준다."""
         with self.cond:
-            if len(self.events) <= after:
+            if len(self.events) == after:
                 self.cond.wait(timeout)
             return self.events[after:]
 
@@ -184,7 +199,7 @@ class Logins:
 
 
 class Platform:
-    """에이전트, 대화 하나, 일 목록, 스케줄, 결과함, 로그인을 맡는다.
+    """에이전트, 대화, 일 목록, 스케줄, 결과함, 로그인을 맡는다.
 
     에이전트(custom/agents/)는 플랫폼이 정하고, 엔진(engines/)은 그 에이전트를 돌리는 부품이다.
     이 클래스는 엔진 이름을 몰라도 된다. 엔진마다 다른 것은 engines/가 맡는다.
@@ -195,19 +210,21 @@ class Platform:
         self.workspace = pathlib.Path(root) / "workspace"
         self.tasks_dir = pathlib.Path(root) / "tasks"
         self.custom = pathlib.Path(root) / "custom"
+        self.store = ConversationStore(pathlib.Path(root) / "conversations")
         self.client_factory = client_factory
         self.status_checker = status_checker
         self.install_checker = install_checker
         self.log = EventLog()
         self.logins = logins or Logins(self.log)
         self.lock = threading.Lock()
+        # 엔진 세션은 한 번에 하나만 열어 둔다. 아래 넷은 그 세션의 것이다.
         self.client = None
-        self.agent = None            # 연결한 에이전트의 이름
+        self.conversation_id = None  # 세션을 연 대화
+        self.agent = None            # 그 대화의 에이전트
         self.engine = None           # 그 에이전트를 돌리는 엔진
         self.state = "idle"          # idle, starting, ready, busy, error
+        self.partial = []            # 지금 차례에 받은 답 조각. 엔진이 중간에 끝나도 남기려고 모은다
         self.pending = {}            # 허락을 기다리는 요청: 번호 → {event, allow}
-        self.history = {}            # 에이전트 이름 → 앞의 대화 [{role, text}]. 대시보드를 끄면 사라진다
-        self.turn = []               # 지금 차례의 답 조각
         self.next_permission = 0
         self.last_run = {}           # 스케줄 판단용: 일 이름 → 오늘 돌렸거나 건너뛴 날짜
         self.ran_at = {}             # 화면 표시용: 일 이름 → 실제로 돌린 시각
@@ -242,10 +259,8 @@ class Platform:
     # ---- 에이전트 ----
 
     def agents(self):
-        items = custom_loader.agents(self.custom)
-        for item in items:
-            item["history"] = len(self.history.get(item["name"], []))
-        return {"agents": items, "current": self.agent, "engine": self.engine, "state": self.state}
+        return {"agents": custom_loader.agents(self.custom), "current": self.agent, "engine": self.engine,
+                "state": self.state}
 
     def save_agent(self, body, create):
         try:
@@ -253,13 +268,8 @@ class Platform:
         except custom_loader.AgentError as error:
             raise ApiError(error.status, str(error))
 
-    # ---- 대화 ----
-
-    def connect(self, agent, engine=None, fresh=False):
-        """에이전트에 연결한다. engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다.
-
-        플랫폼이 가진 그 에이전트의 앞의 대화를 새 세션에 다시 보낸다. fresh=True이면 지우고 새로 시작한다.
-        """
+    def _agent_and_engine(self, agent, engine=None):
+        """에이전트를 읽고 돌릴 엔진을 정한다. engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다."""
         try:
             definition = custom_loader.agent(agent, self.custom)
             engine = engine or definition["engine"]
@@ -268,104 +278,198 @@ class Platform:
             raise ApiError(error.status, str(error))
         except EngineError as error:
             raise ApiError(400, str(error))
+        return definition, engine
+
+    # ---- 대화 ----
+    #
+    # 대화 하나는 conversations/<번호>.json 하나다(conversations.py). 대화마다 에이전트 하나와 이야기한다.
+    # 질문을 받은 대화가 지금 열어 둔 엔진 세션의 대화가 아니거나 엔진이 바뀌었으면 세션을 새로 연다.
+    # 새 세션의 첫 질문 앞에는 플랫폼 안내를 붙이고, 그 안내에 그 대화의 앞부분을 넣는다.
+    # 그래서 대화를 바꿔도, 엔진을 바꿔도, 대시보드를 다시 켜도 대화가 이어진다.
+
+    def conversations(self):
+        return {"conversations": self.store.listing()}
+
+    def conversation(self, conversation_id):
+        try:
+            return self.store.load(conversation_id)
+        except ConversationError as error:
+            raise ApiError(error.status, str(error))
+
+    def create_conversation(self, agent, engine=None):
+        definition, engine = self._agent_and_engine(str(agent or ""), engine or None)
+        return self.store.create(definition["name"], engine)
+
+    def _running(self, conversation_id):
+        """그 대화가 답을 쓰는 중인지 본다. self.lock 안에서 부른다."""
+        return self.conversation_id == conversation_id and self.state in ("starting", "busy")
+
+    def _detach(self):
+        """열어 둔 엔진 세션을 떼어 낸다. self.lock 안에서 부르고, 돌려받은 세션은 lock 밖에서 닫는다."""
+        old, self.client = self.client, None
+        self.conversation_id, self.agent, self.engine, self.state = None, None, None, "idle"
+        return old
+
+    def change_engine(self, conversation_id, engine):
+        """대화의 엔진을 바꾼다. 다음 질문에서 새 엔진의 세션을 열고 지금까지의 대화를 넘긴다."""
+        conversation = self.conversation(conversation_id)
+        if not engine:
+            raise ApiError(400, "바꿀 엔진이 없습니다.")
+        _, engine = self._agent_and_engine(conversation["agent"], str(engine))
+        if engine == conversation["engine"]:
+            return conversation
         with self.lock:
-            if self.state in ("starting", "busy"):
-                raise ApiError(409, "앞의 일이 끝난 뒤에 바꿀 수 있습니다.")
-            old, self.client = self.client, None
-            self.agent, self.engine, self.state = agent, engine, "starting"
-            if fresh:
-                self.history.pop(agent, None)
-            history = list(self.history.get(agent, []))
+            if self._running(conversation_id):
+                raise ApiError(409, "이 대화의 답을 쓰는 중입니다. 끝난 뒤에 엔진을 바꿉니다.")
+            old = self._detach() if self.conversation_id == conversation_id else None
         if old:
             old.close()
-        self.log.add(type="status", state="starting", agent=agent, engine=engine)
-        threading.Thread(target=self._start, args=(definition, engine, history), daemon=True).start()
-
-    def _start(self, definition, engine, history):
-        agent = definition["name"]
-        preamble = custom_loader.preamble(self.workspace, self.custom, definition, history)
-        client = None
+        note = (f"엔진을 {conversation['engine']}에서 {engine}로 바꿨다. "
+                "다음 질문을 보낼 때 지금까지의 대화를 플랫폼 안내에 넣어 이어 간다.")
         try:
-            client = self.client_factory(engine, self.workspace, on_text=self._on_text, on_tool=self._on_tool,
-                                         on_permission=self._ask, on_notice=self._on_notice, preamble=preamble)
-            client.start()
-        except EngineError as error:
-            if client is not None:
-                client.close()
-            with self.lock:
-                self.state = "error"
-            self.log.add(type="status", state="error", agent=agent, engine=engine, message=str(error))
-            return
-        with self.lock:
-            if (self.agent, self.engine) != (agent, engine):
-                client.close()
-                return
-            self.client, self.state = client, "ready"
-        self.log.add(type="status", state="ready", agent=agent, engine=engine)
-        self.log.add(type="preamble", agent=agent, engine=engine, text=preamble, history=len(history))
+            return self.store.change_engine(conversation_id, engine, note)
+        except ConversationError as error:
+            raise ApiError(error.status, str(error))
 
-    def send(self, text):
-        if not text.strip():
+    def delete_conversation(self, conversation_id):
+        with self.lock:
+            if self._running(conversation_id):
+                raise ApiError(409, "이 대화의 답을 쓰는 중입니다. 끝난 뒤에 지웁니다.")
+            try:
+                self.store.delete(conversation_id)
+            except ConversationError as error:
+                raise ApiError(error.status, str(error))
+            old = self._detach() if self.conversation_id == conversation_id else None
+        if old:
+            old.close()
+
+    def prompt(self, conversation_id, text):
+        """대화에 질문을 보낸다. 답은 사건으로 오고, 끝나면 대화 기록에 남는다."""
+        text = str(text or "").strip()
+        if not text:
             raise ApiError(400, "보낼 내용이 없습니다.")
+        conversation = self.conversation(conversation_id)
+        definition, engine = self._agent_and_engine(conversation["agent"], conversation["engine"])
         with self.lock:
-            if self.state != "ready":
-                raise ApiError(409, "에이전트가 준비되지 않았거나 앞의 답을 쓰는 중입니다.")
-            self.state, client = "busy", self.client
-            self.history.setdefault(self.agent, []).append({"role": "user", "text": text})
-            self.turn = []
-        self.log.add(type="user", text=text)
-        threading.Thread(target=self._prompt, args=(client, text), daemon=True).start()
+            if self.state in ("starting", "busy"):
+                raise ApiError(409, "다른 질문의 답을 쓰는 중입니다. 끝난 뒤에 보냅니다.")
+            reuse = (self.client is not None and self.state == "ready"
+                     and (self.conversation_id, self.engine) == (conversation_id, engine))
+            old = None if reuse else self._detach()
+            self.conversation_id, self.agent, self.engine = conversation_id, definition["name"], engine
+            self.state = "busy" if reuse else "starting"
+            self.partial = []
+        if old:
+            old.close()
+        self._record(conversation_id, {"role": "user", "text": text})
+        self._event("user", text=text)
+        self._event("status", state=self.state, agent=self.agent, engine=engine)
+        threading.Thread(target=self._turn, daemon=True,
+                         args=(conversation_id, definition, engine, conversation["messages"], text, reuse)).start()
 
-    def _prompt(self, client, text):
-        """엔진이 어떤 꼴로 답하든, 플랫폼은 하나의 형식(TurnResult)으로 받아 화면과 기록에 쓴다."""
-        agent, result = self.agent, None
+    def _turn(self, conversation_id, definition, engine, history, text, reuse):
+        """질문 하나를 엔진에 보낸다. 엔진이 어떤 꼴로 답하든 하나의 형식(TurnResult)으로 받아 기록과 화면에 쓴다."""
+        client, result, error = self.client if reuse else None, None, None
         try:
+            if client is None:
+                client = self._open(conversation_id, definition, engine, history)
             result = client.send(text)
-            self.log.add(type="done", stop=result.stop, stopLabel=result.stop_label, usage=result.usage_text,
-                         refused=len(result.refused))
-            state = "ready"
-        except EngineError as error:
-            self.log.add(type="status", state="error", agent=self.agent, engine=self.engine, message=str(error))
-            state = "error"
+        except Exception as failure:  # 엔진 오류든 코드의 버그든 기록하고, 다음 질문을 받을 수 있게 한다
+            error = failure
+        if result is not None:
+            self._record(conversation_id, {
+                "role": "agent", "text": result.text, "engine": engine, "stop": result.stop,
+                "stopLabel": result.stop_label, "usage": result.usage_text,
+                "tools": [tool_line(t) for t in result.tools], "refused": [tool_line(t) for t in result.refused],
+                "notices": result.notices})
+        else:
+            partial = "".join(self.partial).strip()
+            if partial:
+                self._record(conversation_id, {"role": "agent", "text": partial, "engine": engine,
+                                               "stop": "error", "stopLabel": "오류로 멈춤"})
+            self._record(conversation_id, {"role": "note", "text": f"오류: {error}", "error": True})
         with self.lock:
-            answer = result.text if result else "".join(self.turn).strip()
-            if answer:
-                self.history.setdefault(agent, []).append({"role": "agent", "text": answer})
-            self.turn = []
-            if self.client is client:
-                self.state = state
+            self.state = "ready" if result is not None else "error"
+        if result is not None:
+            self._event("done", stop=result.stop, stopLabel=result.stop_label, usage=result.usage_text,
+                        refused=len(result.refused))
+        else:
+            self._event("status", state="error", agent=definition["name"], engine=engine, message=str(error))
+
+    def _open(self, conversation_id, definition, engine, history):
+        """엔진 세션을 새로 연다. 첫 질문에 붙일 플랫폼 안내에 그 대화의 앞부분(history)을 넣는다."""
+        preamble = custom_loader.preamble(self.workspace, self.custom, definition, history)
+        client = self.client_factory(engine, self.workspace, on_text=self._on_text, on_tool=self._on_tool,
+                                     on_permission=self._ask, on_notice=self._on_notice, preamble=preamble)
+        try:
+            client.start()
+        except EngineError:
+            client.close()
+            raise
+        with self.lock:
+            self.client, self.state = client, "busy"
+        carried = len(custom_loader.history_lines(history))
+        self._record(conversation_id, {"role": "preamble", "text": preamble, "engine": engine, "history": carried})
+        self._event("status", state="busy", agent=definition["name"], engine=engine)
+        self._event("preamble", agent=definition["name"], engine=engine, text=preamble, history=carried)
+        return client
+
+    def _record(self, conversation_id, message):
+        """대화 기록에 메시지를 더한다. 그사이 대화 파일이 없어졌으면 기록하지 않는다."""
+        try:
+            self.store.append(conversation_id, message)
+        except ConversationError:
+            pass
+
+    def _event(self, event_type, **fields):
+        """대화의 사건. 어느 대화의 것인지 conversation 칸에 적는다."""
+        return self.log.add(type=event_type, conversation=self.conversation_id, **fields)
+
+    def snapshot(self):
+        """지금 엔진 세션과 진행 중인 차례의 사건. 화면이 처음 열릴 때 부른다."""
+        with self.lock:
+            state, conversation_id, agent, engine = self.state, self.conversation_id, self.agent, self.engine
+        with self.log.cond:
+            events = list(self.log.events)
+        live = []
+        if state in ("starting", "busy"):
+            asked = [i for i, e in enumerate(events) if e["type"] == "user" and e.get("conversation") == conversation_id]
+            if asked:
+                live = [e for e in events[asked[-1] + 1:] if e.get("conversation") == conversation_id]
+        return {"state": state, "agent": agent, "engine": engine, "conversation": conversation_id,
+                "live": live, "last": len(events), "epoch": self.log.epoch}
 
     def _on_text(self, text):
-        self.turn.append(text)
-        self.log.add(type="text", text=text)
+        self.partial.append(text)
+        self._event("text", text=text)
 
     def _on_notice(self, text):
-        self.log.add(type="notice", text=text)
+        self._event("notice", text=text)
 
     def _on_tool(self, request):
-        self.log.add(type="tool", kind=request.kind, label=request.label, detail=request.detail)
+        self._event("tool", kind=request.kind, label=request.label, detail=request.detail)
 
     def _ask(self, request):
         """에이전트가 허락을 물으면 먼저 custom/rules.py에 묻고, "ask"이면 카드를 띄워 사람의 답을 기다린다."""
         decision, error = custom_loader.decide(self.agent, request, self.custom)
         if error:
-            self.log.add(type="rule_error", message=error)
+            self._event("rule_error", message=error)
         if decision != "ask":
-            self.log.add(type="rule", kind=request.kind, label=request.label, detail=request.detail,
-                         allow=decision == "allow")
+            self._event("rule", kind=request.kind, label=request.label, detail=request.detail,
+                        allow=decision == "allow")
             return decision == "allow"
         with self.lock:
             self.next_permission += 1
             number = self.next_permission
             waiter = {"event": threading.Event(), "allow": False}
             self.pending[number] = waiter
-        self.log.add(type="permission", id=number, kind=request.kind, label=request.label,
-                     detail=request.detail, title=request.title)
+        self._event("permission", id=number, kind=request.kind, label=request.label,
+                    detail=request.detail, title=request.title)
         answered = waiter["event"].wait(PERMISSION_WAIT_SECONDS)
         with self.lock:
             self.pending.pop(number, None)
         allow = waiter["allow"] if answered else False
-        self.log.add(type="permission_result", id=number, allow=allow, timeout=not answered)
+        self._event("permission_result", id=number, allow=allow, timeout=not answered)
         return allow
 
     def answer(self, number, allow):
@@ -510,8 +614,15 @@ def make_handler(platform):
                     after = int(parse_qs(url.query).get("after", ["0"])[0])
                     events = platform.log.since(after)
                     last = events[-1]["seq"] if events else after
-                    return self.send_json(200, {"events": events, "last": last, "state": platform.state,
-                                                "agent": platform.agent, "engine": platform.engine})
+                    return self.send_json(200, {"events": events, "last": last, "epoch": platform.log.epoch,
+                                                "state": platform.state, "agent": platform.agent,
+                                                "engine": platform.engine, "conversation": platform.conversation_id})
+                if parts == ["api", "state"]:
+                    return self.send_json(200, platform.snapshot())
+                if parts == ["api", "conversations"]:
+                    return self.send_json(200, platform.conversations())
+                if len(parts) == 3 and parts[:2] == ["api", "conversations"]:
+                    return self.send_json(200, platform.conversation(parts[2]))
                 if parts == ["api", "tasks"]:
                     return self.send_json(200, platform.tasks())
                 if parts == ["api", "outbox"]:
@@ -526,15 +637,13 @@ def make_handler(platform):
             parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
             try:
                 body = self.read_json()
-                if parts == ["api", "session"]:
-                    platform.connect(str(body.get("agent", "")), body.get("engine") or None,
-                                     fresh=body.get("fresh") is True)
+                if parts == ["api", "conversations"]:
+                    return self.send_json(201, platform.create_conversation(body.get("agent"), body.get("engine")))
+                if len(parts) == 4 and parts[:2] == ["api", "conversations"] and parts[3] == "prompt":
+                    platform.prompt(parts[2], body.get("text"))
                     return self.send_json(202, {"ok": True})
                 if parts == ["api", "agents"]:
                     return self.send_json(201, platform.save_agent(body, create=True))
-                if parts == ["api", "prompt"]:
-                    platform.send(str(body.get("text", "")))
-                    return self.send_json(202, {"ok": True})
                 if len(parts) == 3 and parts[:2] == ["api", "permissions"] and parts[2].isdigit():
                     platform.answer(int(parts[2]), body.get("allow") is True)
                     return self.send_json(200, {"ok": True})
@@ -564,9 +673,22 @@ def make_handler(platform):
             except ApiError as error:
                 self.send_json(error.status, {"error": str(error)})
 
+        def do_PATCH(self):
+            parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
+            try:
+                body = self.read_json()
+                if len(parts) == 3 and parts[:2] == ["api", "conversations"]:
+                    return self.send_json(200, platform.change_engine(parts[2], body.get("engine")))
+                raise ApiError(404, "없는 주소입니다.")
+            except ApiError as error:
+                self.send_json(error.status, {"error": str(error)})
+
         def do_DELETE(self):
             parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
             try:
+                if len(parts) == 3 and parts[:2] == ["api", "conversations"]:
+                    platform.delete_conversation(parts[2])
+                    return self.send_json(200, {"ok": True})
                 if len(parts) == 3 and parts[:2] == ["api", "login"]:
                     platform.logins.cancel(parts[2])
                     return self.send_json(200, {"ok": True})

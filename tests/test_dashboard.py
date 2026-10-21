@@ -102,55 +102,73 @@ class DashboardTest(unittest.TestCase):
             with error:
                 return error.code, json.loads(error.read())
 
-    def wait_for(self, check, timeout=15):
+    def wait_for(self, check, timeout=15, log=None):
         deadline = time.time() + timeout
         while time.time() < deadline:
-            events = self.platform.log.events
+            events = (log or self.platform.log).events
             found = [e for e in events if check(e)]
             if found:
                 return found[0]
             time.sleep(0.05)
         self.fail("기다린 사건이 오지 않았습니다.")
 
-    def connect(self, agent="기본_도우미", engine=None, fresh=False):
+    def new_conversation(self, agent="기본_도우미", engine=None):
+        status, body = self.call("POST", "/api/conversations", {"agent": agent, "engine": engine})
+        self.assertEqual(status, 201, body)
+        return body["id"]
+
+    def send(self, conversation, text):
+        """질문을 보내고, 보내기 전의 사건 수를 돌려준다. 그 뒤의 사건이 이 질문의 것이다."""
         start = len(self.platform.log.events)
-        status, _ = self.call("POST", "/api/session", {"agent": agent, "engine": engine, "fresh": fresh})
-        self.assertEqual(status, 202)
-        return self.wait_for(lambda e: e["type"] == "status" and e["state"] == "ready" and e["seq"] > start)
+        status, body = self.call("POST", f"/api/conversations/{conversation}/prompt", {"text": text})
+        self.assertEqual(status, 202, body)
+        return start
+
+    def ask(self, conversation, text):
+        """질문을 보내고 차례가 끝날 때까지 기다린 뒤 받은 답 조각을 이어 돌려준다."""
+        start = self.send(conversation, text)
+        self.wait_for(lambda e: e["type"] == "done" and e["seq"] > start)
+        return "".join(e["text"] for e in self.platform.log.events[start:] if e["type"] == "text")
 
     def text_so_far(self):
         return "".join(e["text"] for e in self.platform.log.events if e["type"] == "text")
 
     def test_chat_streams_answer_through_events(self):
-        self.connect()
-        status, _ = self.call("POST", "/api/prompt", {"text": "안녕"})
-        self.assertEqual(status, 202)
-        self.wait_for(lambda e: e["type"] == "done")
-        self.assertEqual(self.text_so_far(), "받음: 안녕")
+        conversation = self.new_conversation()
+        self.assertEqual(self.ask(conversation, "안녕"), "받음: 안녕")
         status, body = self.call("GET", "/api/events?after=0")
         self.assertEqual(status, 200)
-        self.assertEqual([e["type"] for e in body["events"]][:2], ["status", "status"])
+        self.assertEqual([e["type"] for e in body["events"]][:4], ["user", "status", "status", "preamble"])
+        self.assertTrue(all(e["conversation"] == conversation for e in body["events"]))
         self.assertEqual(body["last"], body["events"][-1]["seq"])
 
     def test_permission_card_is_answered_through_api(self):
-        self.connect()
-        self.call("POST", "/api/prompt", {"text": "도구 써 줘"})
+        conversation = self.new_conversation()
+        self.send(conversation, "도구 써 줘")
         card = self.wait_for(lambda e: e["type"] == "permission")
-        self.assertEqual(card["title"], "Running: date")
+        self.assertEqual((card["title"], card["conversation"]), ("Running: date", conversation))
         status, _ = self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
         self.assertEqual(status, 200)
         self.wait_for(lambda e: e["type"] == "done")
         self.assertTrue(self.text_so_far().endswith("/ allow-once"))
 
-    def test_prompt_before_connect_is_refused(self):
-        status, body = self.call("POST", "/api/prompt", {"text": "안녕"})
-        self.assertEqual(status, 409)
+    def test_prompt_needs_a_conversation_and_text(self):
+        status, _ = self.call("POST", "/api/conversations/20261021-000000-abcd/prompt", {"text": "안녕"})
+        self.assertEqual(status, 404)
+        status, _ = self.call("POST", "/api/conversations/..%2F..%2Fengines/prompt", {"text": "안녕"})
+        self.assertEqual(status, 404)
+        conversation = self.new_conversation()
+        status, body = self.call("POST", f"/api/conversations/{conversation}/prompt", {"text": "  "})
+        self.assertEqual(status, 400)
         self.assertIn("error", body)
 
     def test_unknown_agent_or_engine_is_refused(self):
-        status, _ = self.call("POST", "/api/session", {"agent": "없는에이전트"})
+        status, _ = self.call("POST", "/api/conversations", {"agent": "없는에이전트"})
         self.assertEqual(status, 404)
-        status, _ = self.call("POST", "/api/session", {"agent": "기본_도우미", "engine": "없는엔진"})
+        status, _ = self.call("POST", "/api/conversations", {"agent": "기본_도우미", "engine": "없는엔진"})
+        self.assertEqual(status, 400)
+        conversation = self.new_conversation()
+        status, _ = self.call("PATCH", f"/api/conversations/{conversation}", {"engine": "없는엔진"})
         self.assertEqual(status, 400)
 
     def test_task_runs_and_result_appears_in_outbox(self):
@@ -194,33 +212,26 @@ class DashboardTest(unittest.TestCase):
         (self.root / "custom").mkdir(exist_ok=True)
         (self.root / "custom" / name).write_text(text, encoding="utf-8")
 
-    def ask(self, text):
-        start = len(self.platform.log.events)
-        self.call("POST", "/api/prompt", {"text": text})
-        self.wait_for(lambda e: e["type"] == "done" and e["seq"] > start)
-        return "".join(e["text"] for e in self.platform.log.events[start:] if e["type"] == "text")
-
     def test_preamble_goes_with_first_prompt_only(self):
         self.write_custom("업무.md", "- 맡는 업무: 마감 정리\n")
-        self.connect()
+        conversation = self.new_conversation()
+        self.assertEqual(self.ask(conversation, "안내"), "받음: 있음")
         note = self.wait_for(lambda e: e["type"] == "preamble")
         self.assertIn("마감 정리", note["text"])
-        self.assertEqual(self.ask("안내"), "받음: 있음")
-        self.assertEqual(self.ask("안내"), "받음: 없음")
+        self.assertEqual(self.ask(conversation, "안내"), "받음: 없음")
 
     def test_rule_allows_without_card(self):
         self.write_custom("rules.py", "def decide(agent, request):\n"
                                       "    return 'allow' if request.command == 'date' else 'ask'\n")
-        self.connect()
-        self.assertTrue(self.ask("도구 써 줘").endswith("/ allow-once"))
+        conversation = self.new_conversation()
+        self.assertTrue(self.ask(conversation, "도구 써 줘").endswith("/ allow-once"))
         rule = self.wait_for(lambda e: e["type"] == "rule")
         self.assertEqual((rule["allow"], rule["detail"]), (True, "date"))
         self.assertFalse([e for e in self.platform.log.events if e["type"] == "permission"])
 
     def test_broken_rule_falls_back_to_card(self):
         self.write_custom("rules.py", "def decide(agent, request):\n    return 1 / 0\n")
-        self.connect()
-        self.call("POST", "/api/prompt", {"text": "도구 써 줘"})
+        self.send(self.new_conversation(), "도구 써 줘")
         card = self.wait_for(lambda e: e["type"] == "permission")
         self.wait_for(lambda e: e["type"] == "rule_error")
         self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
@@ -341,10 +352,11 @@ class DashboardTest(unittest.TestCase):
     # ---- 에이전트와 엔진 ----
 
     def test_agent_runs_on_its_engine_or_a_chosen_one(self):
-        ready = self.connect()
-        self.assertEqual((ready["agent"], ready["engine"]), ("기본_도우미", "kiro"))
-        ready = self.connect(engine="codex")
-        self.assertEqual(ready["engine"], "codex")
+        status, body = self.call("POST", "/api/conversations", {"agent": "기본_도우미"})
+        self.assertEqual((body["agent"], body["engine"]), ("기본_도우미", "kiro"))
+        self.ask(body["id"], "하나")
+        other = self.new_conversation(engine="codex")
+        self.ask(other, "둘")
         self.assertEqual(ENGINES_USED, ["kiro", "codex"])
         status, body = self.call("GET", "/api/agents")
         self.assertEqual((body["current"], body["engine"]), ("기본_도우미", "codex"))
@@ -352,9 +364,9 @@ class DashboardTest(unittest.TestCase):
     def test_same_agent_gets_same_preamble_on_any_engine(self):
         texts = []
         for engine in ("kiro", "claude", "codex"):
-            self.connect(engine=engine, fresh=True)   # 앞의 대화가 없을 때 안내는 엔진과 상관없이 같다
+            conversation = self.new_conversation(engine=engine)   # 앞의 대화가 없을 때 안내는 엔진과 상관없이 같다
+            self.assertEqual(self.ask(conversation, "안내"), "받음: 있음")
             texts.append([e for e in self.platform.log.events if e["type"] == "preamble"][-1]["text"])
-            self.assertEqual(self.ask("안내"), "받음: 있음")
         self.assertEqual(len(set(texts)), 1)
         self.assertIn("너는 기본 도우미다.", texts[0])
 
@@ -399,32 +411,125 @@ class DashboardTest(unittest.TestCase):
         return [e for e in self.platform.log.events if e["type"] == "preamble"][-1]
 
     def test_conversation_continues_on_another_engine(self):
-        self.connect(engine="kiro")
-        self.assertEqual(self.ask("발표안내.md를 기억해"), "받음: 발표안내.md를 기억해")
-        self.connect(engine="claude")
+        conversation = self.new_conversation(engine="kiro")
+        self.assertEqual(self.ask(conversation, "발표안내.md를 기억해"), "받음: 발표안내.md를 기억해")
+        status, body = self.call("PATCH", f"/api/conversations/{conversation}", {"engine": "claude"})
+        self.assertEqual((status, body["engine"]), (200, "claude"))
+        self.assertIn("엔진을 kiro에서 claude로 바꿨다", body["messages"][-1]["text"])
+        self.assertEqual(self.ask(conversation, "이어서"), "받음: 이어서")
         note = self.last_preamble()
         self.assertEqual(note["history"], 2)
         self.assertIn("[사용자] 발표안내.md를 기억해", note["text"])
         self.assertIn("[에이전트] 받음: 발표안내.md를 기억해", note["text"])
+        self.assertNotIn("엔진을 kiro에서", note["text"])     # 플랫폼의 알림은 앞의 대화에 넣지 않는다
         self.assertEqual(ENGINES_USED, ["kiro", "claude"])
-        status, body = self.call("GET", "/api/agents")
-        self.assertEqual(body["agents"][0]["history"], 2)
 
-    def test_fresh_conversation_drops_history(self):
-        self.connect()
-        self.ask("하나")
-        start = len(self.platform.log.events)
-        self.call("POST", "/api/session", {"agent": "기본_도우미", "fresh": True})
-        self.wait_for(lambda e: e["type"] == "preamble" and e["seq"] > start)
+    def test_new_conversation_starts_without_history(self):
+        self.ask(self.new_conversation(), "하나")
+        self.ask(self.new_conversation(), "둘")
         self.assertEqual(self.last_preamble()["history"], 0)
         self.assertNotIn("지금까지의 대화", self.last_preamble()["text"])
 
-    def test_history_is_kept_per_agent(self):
+    def test_switching_back_reopens_the_session_with_that_history(self):
         write_agent(self.root, "메모_정리", role="메모만.")
-        self.connect()
-        self.ask("기본에게")
-        self.connect(agent="메모_정리")
+        first = self.new_conversation()
+        self.ask(first, "기본에게")
+        self.ask(first, "또")                                # 같은 대화는 세션을 그대로 쓴다
+        self.assertEqual(len([e for e in self.platform.log.events if e["type"] == "preamble"]), 1)
+        second = self.new_conversation(agent="메모_정리")
+        self.ask(second, "메모에게")
         self.assertEqual(self.last_preamble()["history"], 0)
+        self.ask(first, "다시 기본에게")
+        note = self.last_preamble()
+        self.assertEqual((note["agent"], note["history"]), ("기본_도우미", 4))
+        self.assertNotIn("메모에게", note["text"])
+
+
+    # ---- 대화 목록, 기록 파일, 지우기 ----
+
+    def test_conversations_are_saved_as_files_and_listed(self):
+        first = self.new_conversation()
+        self.ask(first, "발표 준비 메모를 정리해 줘\n둘째 줄")
+        second = self.new_conversation(engine="claude")
+        status, body = self.call("GET", "/api/conversations")
+        self.assertEqual(status, 200)
+        self.assertEqual([c["id"] for c in body["conversations"]][:2], [second, first])
+        listed = {c["id"]: c for c in body["conversations"]}
+        self.assertEqual((listed[first]["title"], listed[first]["messages"]), ("발표 준비 메모를 정리해 줘", 2))
+        self.assertEqual((listed[second]["title"], listed[second]["engine"]), ("", "claude"))
+        self.assertTrue((self.root / "conversations" / f"{first}.json").is_file())
+        status, body = self.call("GET", f"/api/conversations/{first}")
+        roles = [m["role"] for m in body["messages"]]
+        self.assertEqual(roles, ["user", "preamble", "agent"])
+        agent = body["messages"][-1]
+        self.assertEqual((agent["text"], agent["engine"], agent["stopLabel"]), ("받음: 발표 준비 메모를 정리해 줘\n둘째 줄", "kiro", "끝"))
+
+    def test_tools_and_refusals_are_kept_in_the_record(self):
+        conversation = self.new_conversation()
+        self.send(conversation, "도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
+        self.wait_for(lambda e: e["type"] == "done")
+        agent = self.call("GET", f"/api/conversations/{conversation}")[1]["messages"][-1]
+        # 가짜 엔진은 Kiro처럼 시작 알림에 제목만 보내고, 명령은 허락 요청에 담는다.
+        self.assertEqual((agent["tools"], agent["refused"]), (["명령 실행 Running: date"], ["명령 실행 date"]))
+
+    def test_delete_conversation(self):
+        conversation = self.new_conversation()
+        self.ask(conversation, "하나")
+        self.assertIsNotNone(self.platform.client)
+        status, _ = self.call("DELETE", f"/api/conversations/{conversation}")
+        self.assertEqual(status, 200)
+        self.assertIsNone(self.platform.client)            # 그 대화의 엔진 세션도 닫는다
+        self.assertEqual(self.call("GET", f"/api/conversations/{conversation}")[0], 404)
+        self.assertEqual(self.call("DELETE", f"/api/conversations/{conversation}")[0], 404)
+        self.assertFalse((self.root / "conversations" / f"{conversation}.json").exists())
+        self.assertEqual(self.call("GET", "/api/conversations")[1]["conversations"], [])
+
+    def test_busy_conversation_cannot_be_deleted_or_changed(self):
+        busy, other = self.new_conversation(), self.new_conversation()
+        self.send(busy, "도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        self.assertEqual(self.call("DELETE", f"/api/conversations/{busy}")[0], 409)
+        self.assertEqual(self.call("PATCH", f"/api/conversations/{busy}", {"engine": "claude"})[0], 409)
+        self.assertEqual(self.call("POST", f"/api/conversations/{other}/prompt", {"text": "끼어들기"})[0], 409)
+        self.assertEqual(self.call("DELETE", f"/api/conversations/{other}")[0], 200)   # 일하지 않는 대화는 지운다
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
+        self.wait_for(lambda e: e["type"] == "done")
+        self.assertEqual(self.call("DELETE", f"/api/conversations/{busy}")[0], 200)
+
+    def test_state_has_the_live_turn_for_a_page_opened_midway(self):
+        conversation = self.new_conversation()
+        self.send(conversation, "도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        status, state = self.call("GET", "/api/state")
+        self.assertEqual((state["state"], state["conversation"]), ("busy", conversation))
+        types = [e["type"] for e in state["live"]]
+        self.assertIn("permission", types)
+        self.assertNotIn("user", types)                    # 질문은 대화 기록에 이미 있다
+        self.assertEqual(state["last"], len(self.platform.log.events))
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
+        self.wait_for(lambda e: e["type"] == "done")
+        self.assertEqual(self.call("GET", "/api/state")[1]["live"], [])
+
+    def test_conversation_continues_after_restart(self):
+        conversation = self.new_conversation()
+        self.ask(conversation, "어제 한 이야기")
+        # 대시보드를 껐다 켠 것과 같다: 같은 폴더로 플랫폼을 새로 만든다.
+        restarted = dashboard.Platform(self.root, client_factory=fake_factory, status_checker=lambda name: True,
+                                       install_checker=lambda engine: True)
+        self.addCleanup(lambda: restarted.client and restarted.client.close())
+        self.assertEqual([c["id"] for c in restarted.conversations()["conversations"]], [conversation])
+        restarted.prompt(conversation, "오늘 이어서")
+        self.wait_for(lambda e: e["type"] == "done", log=restarted.log)
+        note = self.wait_for(lambda e: e["type"] == "preamble", log=restarted.log)
+        self.assertEqual(note["history"], 2)
+        self.assertIn("[사용자] 어제 한 이야기", note["text"])
+
+    def test_events_tell_a_stale_page_to_start_over(self):
+        status, body = self.call("GET", "/api/events?after=500")   # 서버를 다시 켜기 전의 번호
+        self.assertEqual((status, body["events"]), (200, []))
+        self.assertEqual(body["epoch"], self.platform.log.epoch)
 
 
     # ---- 엔진마다 다른 거절을 하나의 결과로 ----
@@ -432,8 +537,7 @@ class DashboardTest(unittest.TestCase):
     def test_refusal_on_codex_style_engine_still_ends_as_done(self):
         write_agent(self.root, "코덱스", engine="codex")
         with mock.patch.dict(os.environ, {"FAKE_STYLE": "codex"}):
-            self.connect(agent="코덱스")
-            self.call("POST", "/api/prompt", {"text": "도구 써 줘"})
+            self.send(self.new_conversation(agent="코덱스"), "도구 써 줘")
             card = self.wait_for(lambda e: e["type"] == "permission")
             self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
             done = self.wait_for(lambda e: e["type"] == "done")

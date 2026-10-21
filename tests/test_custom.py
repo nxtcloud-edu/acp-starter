@@ -156,6 +156,13 @@ class CustomLoaderTest(unittest.TestCase):
         many = custom_loader.history_text([{"role": "user", "text": "다" * 1400}] * 12)
         self.assertLessEqual(len(many), custom_loader.HISTORY_CHARS + 30)
 
+    def test_history_keeps_only_talk_between_user_and_agent(self):
+        # 대화 기록에는 플랫폼의 알림과 앞서 보낸 플랫폼 안내도 있다. 앞의 대화에는 넣지 않는다.
+        history = [{"role": "user", "text": "하나"}, {"role": "preamble", "text": "안내 전문"},
+                   {"role": "agent", "text": "답 하나"}, {"role": "note", "text": "엔진을 바꿨다"},
+                   {"role": "agent", "text": "  "}]
+        self.assertEqual(custom_loader.history_lines(history), ["[사용자] 하나", "[에이전트] 답 하나"])
+
     def test_preamble_carries_history_before_the_end_line(self):
         text = custom_loader.preamble(self.workspace, self.custom,
                                       history=[{"role": "user", "text": "앞의 질문"}])

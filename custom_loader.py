@@ -184,18 +184,27 @@ def business(custom=CUSTOM):
         return ""
 
 
-def history_text(history):
-    """플랫폼이 가진 앞의 대화를 안내에 넣을 글로 만든다. 길면 오래된 것부터 뺀다."""
+def history_lines(history):
+    """대화 기록(conversations.py의 메시지)에서 사람과 에이전트가 나눈 말만 골라 안내에 넣을 줄로 만든다.
+
+    플랫폼의 알림과 앞서 보낸 플랫폼 안내는 넣지 않는다. 길면 오래된 것부터 뺀다.
+    """
     names = {"user": "사용자", "agent": "에이전트"}
+    talk = [m for m in (history or []) if m.get("role") in names and (m.get("text") or "").strip()]
     lines = []
-    for message in (history or [])[-HISTORY_MESSAGES:]:
+    for message in talk[-HISTORY_MESSAGES:]:
         text = message["text"].strip()
         if len(text) > MESSAGE_CHARS:
             text = text[:MESSAGE_CHARS] + " …(줄임)"
-        lines.append(f"[{names.get(message['role'], message['role'])}] {text}")
+        lines.append(f"[{names[message['role']]}] {text}")
     while lines and sum(len(line) for line in lines) > HISTORY_CHARS:
         lines.pop(0)
-    return "\n\n".join(lines)
+    return lines
+
+
+def history_text(history):
+    """플랫폼이 가진 앞의 대화를 안내에 넣을 글로 만든다."""
+    return "\n\n".join(history_lines(history))
 
 
 def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None, history=None):

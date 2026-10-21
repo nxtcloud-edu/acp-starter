@@ -14,7 +14,7 @@
 흐름은 하나다. 사용자의 입력 → 플랫폼(엔진 이름을 모름) → 엔진 어댑터가 그 엔진에 맞는 형식으로 바꿔 보냄 → 엔진 → 엔진 어댑터가 하나의 형식(`ToolRequest`, `TurnResult`)으로 포장 → 플랫폼이 화면 표시와 기능 수행.
 
 - 엔진마다 다른 것은 엔진 층(`engines/`, `login.py`)에만 둔다. 엔진 하나는 `engines/<이름>.py` 하나다. 공통 통역은 `engines/base.py`다.
-- 플랫폼 층(`custom_loader.py`, `dashboard.py`, `runner.py`, `app/static/`)과 `custom/`의 코드는 엔진 이름을 문자열로 쓰지 않는다. `tests/test_engine_agnostic.py`가 확인한다.
+- 플랫폼 층(`custom_loader.py`, `conversations.py`, `dashboard.py`, `runner.py`, `app/static/`)과 `custom/`의 코드는 엔진 이름을 문자열로 쓰지 않는다. `tests/test_engine_agnostic.py`가 확인한다.
 - 플랫폼은 `engines.make(이름, 작업 폴더)`로 엔진을 만들고, `send(글)`이 돌려주는 `TurnResult`만 쓴다. 엔진이 보낸 원래 모양(`raw`)에 기대는 코드는 쓰지 않는다.
 - 새 기능은 플랫폼이 직접 한다. 엔진만이 가진 기능(Kiro 에이전트 설정의 prompt, Claude의 `CLAUDE.md`·스킬·훅, Codex의 `AGENTS.md`·스킬·플러그인·기억)에 기대지 않는다. 그런 곳에 넣은 동작은 엔진을 바꾸면 사라진다.
 - 에이전트에게 무언가를 알려야 하면 플랫폼 안내(`custom_loader.preamble`)에 넣는다. 작업 폴더(`workspace/`)에는 엔진만의 파일(`.kiro/`, `.claude/`, `.codex/`, `AGENTS.md`, `CLAUDE.md`)을 두지 않는다.
@@ -28,7 +28,8 @@
 | 엔진 | `engines/kiro.py`, `claude.py`, `codex.py` | 엔진 하나씩. 실행 명령, 샌드박스 설정 파일, 안전 모드, 로그인, 그 엔진만의 모양 |
 | 엔진 | `engines/__init__.py` | 엔진 목록(`ENGINES`)과 `make`, `get`, `names` |
 | 플랫폼 | `custom_loader.py` | `custom/`와 `workspace/skills/`를 읽어 잇는다. 에이전트를 읽고 저장한다. 플랫폼 안내(첫 질문 앞에 붙는 글)를 만든다 |
-| 플랫폼 | `dashboard.py` | 대시보드 서버. JSON API만 낸다. 에이전트, 대화와 대화 기록, 허락 카드, 일 실행과 스케줄, 결과함, 로그인 |
+| 플랫폼 | `conversations.py` | 대화 기록. 대화 하나가 `conversations/<번호>.json` 하나다. 대화 기록은 엔진이 아니라 플랫폼이 갖는다 |
+| 플랫폼 | `dashboard.py` | 대시보드 서버. JSON API만 낸다. 에이전트, 대화, 엔진 세션(한 번에 하나), 허락 카드, 일 실행과 스케줄, 결과함, 로그인 |
 | 플랫폼 | `app/static/` | 대시보드 화면. `dashboard.py`의 API를 부르는 클라이언트다 |
 | 플랫폼 | `runner.py` | 사람 없이 일을 한 번 돌린다. 대시보드와 `run_once.py`가 함께 쓴다 |
 | 사용자 | `custom/` | `brand.json`(이름과 색), `업무.md`(모든 에이전트 공통 업무), `agents/`(에이전트), `rules.py`(허락 규칙), `deliver.py`(결과 보내기) |
@@ -53,7 +54,7 @@
 - Codex 관리 블록(`engines/codex.py`의 `MANAGED`)에서 웹 검색, Apps, 플러그인, 기억을 다시 켜지 않는다. 허락을 거치지 않는 도구와 엔진만의 기억이 생긴다.
 - Claude의 `settingSources: []`와 Codex의 `project_doc_max_bytes = 0`을 지우지 않는다. 지우면 플랫폼 안의 엔진이 사용자의 전역 설정이나 이 파일을 읽는다.
 - 로그인된 엔진의 로그인을 다시 시작하지 않는다. Codex는 시작하자마자 있던 로그인을 지운다(`GOTCHAS.md`).
-- `.homes/`(로그인 정보), `.env`(시크릿)를 커밋하지 않는다. 시크릿은 코드와 문서에 적지 않고 `.env`에 둔다.
+- `.homes/`(로그인 정보), `.env`(시크릿), `conversations/`(대화 기록)를 커밋하지 않는다. 시크릿은 코드와 문서에 적지 않고 `.env`에 둔다. 레포가 공개이면 대화 기록이 모두에게 보인다.
 - 대시보드를 `127.0.0.1` 밖으로 열지 않는다. 인증이 없다.
 
 ## 참고 레포: Kiro Crew

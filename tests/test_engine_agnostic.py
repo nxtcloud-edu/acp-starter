@@ -18,7 +18,7 @@ import engines  # noqa: E402
 from engines import AcpEngine  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
-PLATFORM_FILES = ["custom_loader.py", "dashboard.py", "runner.py", "run_once.py", "chat.py",
+PLATFORM_FILES = ["custom_loader.py", "conversations.py", "dashboard.py", "runner.py", "run_once.py", "chat.py",
                   "app/static/app.js", "custom/rules.py", "custom/deliver.py"]
 
 

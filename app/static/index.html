@@ -29,31 +29,37 @@
     <main>
       <div id="banner" class="banner" hidden></div>
 
-      <!-- 대화: 연결한 에이전트와 이야기한다 -->
+      <!-- 대화: 왼쪽은 대화 목록, 오른쪽은 고른 대화. 대화마다 에이전트 하나와 이야기한다 -->
       <section id="view-chat" class="view">
         <div class="view-head">
           <div>
             <h2>대화</h2>
-            <p id="chat-who" class="muted">연결한 에이전트가 없다. 에이전트 메뉴에서 에이전트와 엔진을 골라 연결한다.</p>
+            <p class="muted">대화마다 에이전트 하나와 이야기한다. 기록은 <code>conversations/</code>에 남아서 엔진을 바꾸거나 다시 켜도 이어 간다.</p>
           </div>
-          <div class="head-actions">
-            <button type="button" id="fresh" class="ghost" title="이 에이전트의 앞의 대화를 지우고 같은 엔진으로 다시 연결한다">새 대화</button>
-            <button type="button" id="change-agent" class="ghost">에이전트 바꾸기</button>
+          <div class="head-actions"><button type="button" id="new-chat">+ 새 대화</button></div>
+        </div>
+        <div class="split">
+          <ul id="chat-list" class="pick-list"></ul>
+          <div class="chat">
+            <div id="chat-head" class="chat-head"></div>
+            <div id="log"></div>
+            <form id="composer">
+              <p id="composer-note" class="muted small" hidden></p>
+              <div class="composer-row">
+                <textarea id="text" rows="2" placeholder="에이전트에게 맡길 일을 적는다. Enter로 보내고, Shift+Enter로 줄을 바꾼다."></textarea>
+                <button type="submit" id="send">보내기</button>
+              </div>
+            </form>
           </div>
         </div>
-        <div id="log"></div>
-        <form id="composer">
-          <textarea id="text" rows="2" placeholder="에이전트에게 맡길 일을 적는다. Enter로 보내고, Shift+Enter로 줄을 바꾼다."></textarea>
-          <button type="submit">보내기</button>
-        </form>
       </section>
 
-      <!-- 에이전트: 에이전트를 고르고, 돌릴 엔진을 골라 연결한다. 만들고 고치는 곳도 여기다 -->
+      <!-- 에이전트: 에이전트와 돌릴 엔진을 골라 새 대화를 시작한다. 지금 대화의 엔진을 바꾸는 곳, 에이전트를 만들고 고치는 곳도 여기다 -->
       <section id="view-agents" class="view" hidden>
         <div class="view-head">
           <div>
             <h2>에이전트</h2>
-            <p class="muted">에이전트를 고르고 돌릴 엔진을 골라 연결한다. 에이전트 파일은 <code>custom/agents/</code>에 있다.</p>
+            <p class="muted">에이전트와 돌릴 엔진을 골라 대화를 시작한다. 에이전트 파일은 <code>custom/agents/</code>에 있다.</p>
           </div>
           <div class="head-actions"><button type="button" id="new-agent">+ 새 에이전트</button></div>
         </div>
