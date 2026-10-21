@@ -8,7 +8,8 @@
 import sys
 
 import custom_loader
-from acp_client import AcpClient, AcpError
+import engines
+from engines import EngineError
 from run_once import parse
 
 
@@ -41,14 +42,14 @@ def main():
         return answer == "y"
 
     try:
-        client = AcpClient("workspace", engine, on_text=show_text, on_tool=show_tool,
-                           on_permission=ask_permission, preamble=custom_loader.preamble(agent=definition))
-    except AcpError as error:
+        client = engines.make(engine, "workspace", on_text=show_text, on_tool=show_tool,
+                              on_permission=ask_permission, preamble=custom_loader.preamble(agent=definition))
+    except EngineError as error:
         print(error)
         return
     try:
         client.start()
-    except AcpError as error:
+    except EngineError as error:
         print(error)
         client.close()
         return
@@ -65,7 +66,7 @@ def main():
                 continue
             client.prompt(text)
             print(f"\n  (쓴 양: {client.usage_text()})")
-    except AcpError as error:
+    except EngineError as error:
         print(f"\n{error}")
     finally:
         client.close()

@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-MODE = sys.argv[1] if len(sys.argv) > 1 else "starter"
+MODE = sys.argv[1] if len(sys.argv) > 1 else "engine"
 PREAMBLE_END = "[여기까지 플랫폼 안내. 아래가 사용자의 요청이다]"   # custom_loader.PREAMBLE_END와 같다
 
 
@@ -52,7 +52,8 @@ for line in sys.stdin:
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "받음: "}})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
         if "도구" in text:
-            update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date"})
+            # 실제 엔진처럼 시작 알림에는 kind가 있고, 허락 요청에는 없다(Kiro와 같은 모양).
+            update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date", "kind": "execute"})
             send({"id": "p1", "method": "session/request_permission", "params": {
                 "sessionId": "s1",
                 "toolCall": {"toolCallId": "t1", "title": "Running: date", "rawInput": {"command": "date"}},

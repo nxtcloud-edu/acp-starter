@@ -12,9 +12,17 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-from acp_client import tool_request  # noqa: E402
+from engines.claude import ClaudeEngine  # noqa: E402
+from engines.codex import CodexEngine  # noqa: E402
+from engines.kiro import KiroEngine  # noqa: E402
 
 WS = "/Users/me/acp-starter/workspace"
+ADAPTERS = {"kiro": KiroEngine(WS), "claude": ClaudeEngine(WS), "codex": CodexEngine(WS)}
+
+
+def tool_request(tool_call, engine, workspace, known_kind=None):
+    """엔진의 어댑터가 도구 요청을 플랫폼 형식으로 바꾼 결과."""
+    return ADAPTERS[engine].tool_request(tool_call, known_kind)
 
 KIRO_SHELL = {"toolCallId": "k1", "title": "Running: python3 skills/x.py --out outbox/a.json", "kind": None,
               "rawInput": {"__tool_use_purpose": "저장", "command": "python3 skills/x.py --out outbox/a.json",
@@ -75,7 +83,7 @@ class ToolRequestTest(unittest.TestCase):
         self.assertEqual(tool_request(CLAUDE_WRITE, "claude", WS).detail, "outbox/a.txt")
         self.assertEqual(tool_request({"title": "Terminal", "kind": "execute", "rawInput": {}}, "claude", WS).detail,
                          "Terminal")
-        self.assertEqual(tool_request({"kind": "execute", "rawInput": {"command": ["ls", "-a"]}}, "x", WS).command,
+        self.assertEqual(tool_request({"kind": "execute", "rawInput": {"command": ["ls", "-a"]}}, "kiro", WS).command,
                          "ls -a")
 
 

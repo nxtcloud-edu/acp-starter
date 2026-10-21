@@ -21,10 +21,10 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-import acp_client
 import custom_loader
+import engines
 import runner
-from acp_client import AcpClient, AcpError
+from engines import EngineError
 
 ROOT = pathlib.Path(__file__).parent
 STATIC = ROOT / "app" / "static"
@@ -47,26 +47,9 @@ class ApiError(Exception):
         self.status = status
 
 
-def installed(engine):
-    """엔진을 실행하고 로그인하는 데 필요한 명령이 모두 있는지 본다."""
-    commands = [engine["command"][0]] + [engine[k][0] for k in ("login", "status") if engine.get(k)]
-    return all(shutil.which(command) for command in commands)
-
-
 def check_login(name):
-    """샌드박스 홈의 로그인 상태를 본다. 알 수 없으면 None."""
-    engine = acp_client.load_engine(name)
-    command = engine.get("status")
-    if not command or shutil.which(command[0]) is None:
-        return None
-    try:
-        result = subprocess.run([shutil.which(command[0]), *command[1:]],
-                                env=acp_client.sandbox_env(name, engine),
-                                capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    output = result.stdout + result.stderr
-    return result.returncode == 0 and '"loggedIn": false' not in output and "Not logged in" not in output
+    """엔진의 샌드박스 로그인 상태. 알 수 없으면 None."""
+    return engines.get(name).check_login()
 
 
 class EventLog:
@@ -98,7 +81,7 @@ class Logins:
                 "terminal"은 화면에서 하지 않고 터미널 명령을 알려 준다(Kiro. 로그인이 컴퓨터 전체에 걸린다).
     """
 
-    def __init__(self, log, load_engine=acp_client.load_engine, env_for=acp_client.sandbox_env,
+    def __init__(self, log, load_engine=engines.get, env_for=lambda name, engine: engine.sandbox_env(),
                  is_logged_in=check_login):
         self.log = log
         self.load_engine = load_engine
@@ -110,17 +93,17 @@ class Logins:
     def _engine(self, name):
         try:
             return self.load_engine(name)
-        except AcpError as error:
+        except EngineError as error:
             raise ApiError(400, str(error))
 
     def start(self, name):
         engine = self._engine(name)
-        mode = engine.get("login_mode", "terminal")
+        mode = engine.login_mode
         if mode == "terminal":
-            raise ApiError(400, f"{name}은 터미널에서 로그인합니다: {' '.join(engine['login'])}")
-        executable = shutil.which(engine["login"][0])
+            raise ApiError(400, f"{name}은 터미널에서 로그인합니다: {' '.join(engine.login)}")
+        executable = shutil.which(engine.login[0])
         if executable is None:
-            raise ApiError(400, f"{engine['login'][0]}를 찾지 못했습니다. README의 준비 절을 보세요.")
+            raise ApiError(400, f"{engine.login[0]}를 찾지 못했습니다. README의 준비 절을 보세요.")
         # 로그인 명령은 시작하자마자 있던 로그인을 지울 수 있다(codex). 그래서 로그인된 상태에서는 시작하지 않는다.
         if self.is_logged_in(name) is True:
             raise ApiError(409, f"{name}은 이미 로그인되어 있습니다. 다른 계정으로 바꾸려면 먼저 로그아웃합니다.")
@@ -128,7 +111,7 @@ class Logins:
             old = self.running.get(name)
             if old and old.poll() is None:
                 raise ApiError(409, "이미 로그인을 진행하는 중입니다.")
-            process = subprocess.Popen([executable, *engine["login"][1:]], env=self.env_for(name, engine),
+            process = subprocess.Popen([executable, *engine.login[1:]], env=self.env_for(name, engine),
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                        errors="replace", bufsize=1)
@@ -188,7 +171,7 @@ class Logins:
 
     def logout(self, name):
         engine = self._engine(name)
-        command = engine.get("logout")
+        command = engine.logout
         if not command:
             raise ApiError(400, f"{name}은 화면에서 로그아웃하지 않습니다. 로그인이 컴퓨터 전체에 걸려 있기 때문입니다.")
         executable = shutil.which(command[0])
@@ -203,12 +186,12 @@ class Logins:
 class Platform:
     """에이전트, 대화 하나, 일 목록, 스케줄, 결과함, 로그인을 맡는다.
 
-    에이전트(custom/agents/)는 플랫폼이 정하고, 엔진(engines.json)은 그 에이전트를 돌리는 부품이다.
-    이 클래스는 엔진 이름을 몰라도 된다. 엔진마다 다른 것은 acp_client.py가 맡는다.
+    에이전트(custom/agents/)는 플랫폼이 정하고, 엔진(engines/)은 그 에이전트를 돌리는 부품이다.
+    이 클래스는 엔진 이름을 몰라도 된다. 엔진마다 다른 것은 engines/가 맡는다.
     """
 
-    def __init__(self, root=ROOT, client_factory=AcpClient, status_checker=check_login,
-                 install_checker=installed, logins=None):
+    def __init__(self, root=ROOT, client_factory=engines.make, status_checker=check_login,
+                 install_checker=lambda engine: engine.installed(), logins=None):
         self.workspace = pathlib.Path(root) / "workspace"
         self.tasks_dir = pathlib.Path(root) / "tasks"
         self.custom = pathlib.Path(root) / "custom"
@@ -237,7 +220,7 @@ class Platform:
     # ---- 엔진 ----
 
     def engines(self):
-        configs = json.loads(acp_client.ENGINES_FILE.read_text(encoding="utf-8"))
+        configs = {name: engines.get(name) for name in engines.names()}
         names = list(configs)
         results = {}
 
@@ -252,9 +235,9 @@ class Platform:
         return {"engines": [{"name": name,
                              "installed": self.install_checker(configs[name]),
                              "loggedIn": results.get(name),
-                             "loginMode": configs[name].get("login_mode", "terminal"),
-                             "loginCommand": " ".join(configs[name].get("login", [])),
-                             "canLogout": bool(configs[name].get("logout"))} for name in names]}
+                             "loginMode": configs[name].login_mode,
+                             "loginCommand": " ".join(configs[name].login),
+                             "canLogout": bool(configs[name].logout)} for name in names]}
 
     # ---- 에이전트 ----
 
@@ -280,10 +263,10 @@ class Platform:
         try:
             definition = custom_loader.agent(agent, self.custom)
             engine = engine or definition["engine"]
-            acp_client.load_engine(engine)
+            engines.get(engine)
         except custom_loader.AgentError as error:
             raise ApiError(error.status, str(error))
-        except AcpError as error:
+        except EngineError as error:
             raise ApiError(400, str(error))
         with self.lock:
             if self.state in ("starting", "busy"):
@@ -303,10 +286,10 @@ class Platform:
         preamble = custom_loader.preamble(self.workspace, self.custom, definition, history)
         client = None
         try:
-            client = self.client_factory(self.workspace, engine, on_text=self._on_text, on_tool=self._on_tool,
+            client = self.client_factory(engine, self.workspace, on_text=self._on_text, on_tool=self._on_tool,
                                          on_permission=self._ask, preamble=preamble)
             client.start()
-        except AcpError as error:
+        except EngineError as error:
             if client is not None:
                 client.close()
             with self.lock:
@@ -339,7 +322,7 @@ class Platform:
             stop_reason = client.prompt(text)
             self.log.add(type="done", stopReason=stop_reason, usage=client.usage_text())
             state = "ready"
-        except AcpError as error:
+        except EngineError as error:
             self.log.add(type="status", state="error", agent=self.agent, engine=self.engine, message=str(error))
             state = "error"
         with self.lock:

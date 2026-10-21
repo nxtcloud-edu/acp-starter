@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import acp_client  # noqa: E402
+import engines  # noqa: E402
 import custom_loader  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
@@ -164,7 +164,7 @@ class CustomLoaderTest(unittest.TestCase):
         for agent in found.values():
             with self.subTest(agent=agent["name"]):
                 self.assertTrue(agent["role"])
-                acp_client.load_engine(agent["engine"])
+                engines.get(agent["engine"])
 
     def test_shipped_skills_point_inside_workspace(self):
         skills = {s["name"]: s for s in custom_loader.skills()}

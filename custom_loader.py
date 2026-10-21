@@ -13,7 +13,7 @@ import pathlib
 import re
 import types
 
-import acp_client
+import engines
 
 ROOT = pathlib.Path(__file__).parent
 CUSTOM = ROOT / "custom"
@@ -94,7 +94,7 @@ def skills(workspace=WORKSPACE):
 #
 # 에이전트 하나는 custom/agents/<이름>.md 파일 하나다. 파일 이름이 에이전트의 이름이다.
 #   ---
-#   engine: kiro                  돌릴 엔진(engines.json의 이름). 빼면 engines.json의 첫 엔진
+#   engine: kiro                  돌릴 엔진(engines/의 이름). 빼면 첫 엔진
 #   description: 한 줄 설명
 #   skills: memo-to-json          쓸 스킬. 쉼표로 여럿. 빼면 모두, "없음"이면 하나도 쓰지 않는다
 #   ---
@@ -105,7 +105,7 @@ def _agents_dir(custom):
 
 
 def default_engine():
-    return next(iter(json.loads(acp_client.ENGINES_FILE.read_text(encoding="utf-8"))))
+    return engines.names()[0]
 
 
 def _parse_agent(name, text):
@@ -149,8 +149,8 @@ def save_agent(data, custom=CUSTOM, workspace=WORKSPACE, create=True):
         raise AgentError(f"에이전트 '{name}'이 없습니다.", 404)
     engine = str(data.get("engine") or default_engine())
     try:
-        acp_client.load_engine(engine)
-    except acp_client.AcpError as error:
+        engines.get(engine)
+    except engines.EngineError as error:
         raise AgentError(str(error))
     chosen = data.get("skills")
     if chosen is not None:
@@ -237,7 +237,7 @@ def _load(name, custom=CUSTOM):
 
 
 def decide(agent, request, custom=CUSTOM):
-    """custom/rules.py의 decide(agent, request)를 부른다. request는 acp_client.ToolRequest다.
+    """custom/rules.py의 decide(agent, request)를 부른다. request는 engines.ToolRequest다.
 
     돌려주는 값: (결정, 오류 글 또는 None).
     """

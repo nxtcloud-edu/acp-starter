@@ -13,7 +13,8 @@ import re
 import threading
 
 import custom_loader
-from acp_client import AcpClient, AcpError
+import engines
+from engines import EngineError
 
 ROOT = pathlib.Path(__file__).parent
 WORKSPACE = ROOT / "workspace"
@@ -24,7 +25,7 @@ TIME_LIMIT_SECONDS = 300
 Result = collections.namedtuple("Result", "path delivery_error")
 
 
-def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpClient,
+def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=engines.make,
              custom=custom_loader.CUSTOM, engine=None):
     """에이전트에게 일을 한 번 맡기고 Result(결과 파일 경로, 보내기 오류)를 돌려준다.
 
@@ -48,10 +49,10 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpCl
     try:
         definition = custom_loader.agent(agent, custom)
         engine = engine or definition["engine"]
-        client = client_factory(workspace, engine, on_text=answer.append, on_tool=on_tool,
+        client = client_factory(engine, workspace, on_text=answer.append, on_tool=on_tool,
                                 on_permission=on_permission,
                                 preamble=custom_loader.preamble(workspace, custom, definition))
-    except (custom_loader.AgentError, AcpError) as error:
+    except (custom_loader.AgentError, EngineError) as error:
         stop_reason = f"오류: {error}"
     if client is not None:
         timer = threading.Timer(TIME_LIMIT_SECONDS, client.close)
@@ -59,7 +60,7 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpCl
         try:
             client.start()
             stop_reason = client.prompt(prompt)
-        except AcpError as error:
+        except EngineError as error:
             stop_reason = f"오류: {error}"
         finally:
             timer.cancel()

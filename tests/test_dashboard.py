@@ -19,30 +19,42 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import dashboard  # noqa: E402
 import runner  # noqa: E402
-from acp_client import AcpClient  # noqa: E402
+import engines  # noqa: E402
+from engines import AcpEngine  # noqa: E402
 
-FAKE = [sys.executable, str(pathlib.Path(__file__).parent / "fake_agent.py"), "starter"]
+FAKE = [sys.executable, str(pathlib.Path(__file__).parent / "fake_agent.py")]
 FAKE_LOGIN = str(pathlib.Path(__file__).parent / "fake_login.py")
-CONFIG = {"home_env": "KIRO_HOME", "expect_mode": "starter"}
-LOGIN_ENGINES = {
-    "kiro": {"login": ["kiro-cli", "login"], "login_mode": "terminal"},
-    "claude": {"login": [sys.executable, FAKE_LOGIN, "code"], "login_mode": "code"},
-    "codex": {"login": [sys.executable, FAKE_LOGIN, "device"], "login_mode": "device"},
-}
+
+
+class TerminalLogin(AcpEngine):
+    name, login, login_mode = "kiro", ["kiro-cli", "login"], "terminal"
+
+
+class CodeLogin(AcpEngine):
+    name, login, login_mode = "claude", [sys.executable, FAKE_LOGIN, "code"], "code"
+
+
+class DeviceLogin(AcpEngine):
+    name, login, login_mode = "codex", [sys.executable, FAKE_LOGIN, "device"], "device"
+
+
+LOGIN_ENGINES = {e.name: e for e in (TerminalLogin, CodeLogin, DeviceLogin)}
 
 
 def fake_login_engine(name):
     if name not in LOGIN_ENGINES:
-        raise dashboard.AcpError("없는 엔진")
+        raise dashboard.EngineError("없는 엔진")
     return LOGIN_ENGINES[name]
 
 
 ENGINES_USED = []   # 가짜 엔진을 만들 때 받은 엔진 이름. 엔진을 바꿔 끼웠는지 확인한다
 
 
-def fake_factory(workspace, engine, **callbacks):
+def fake_factory(engine, workspace, **callbacks):
+    """엔진의 어댑터는 그대로 쓰고, 실행하는 프로그램만 가짜 엔진으로 바꾼다."""
     ENGINES_USED.append(engine)
-    return AcpClient(workspace, engine, command=FAKE, config=CONFIG, env=dict(os.environ), **callbacks)
+    mode = "engine" if engines.get(engine).expect_mode else "auto"
+    return engines.make(engine, workspace, command=FAKE + [mode], env=dict(os.environ), **callbacks)
 
 
 def write_agent(root, name, engine="kiro", skills="모두", role="역할"):
