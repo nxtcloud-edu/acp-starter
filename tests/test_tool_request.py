@@ -40,6 +40,10 @@ CLAUDE_FETCH = {"toolCallId": "c3", "title": "Fetch https://example.com", "kind"
                 "rawInput": {"url": "https://example.com", "prompt": "요약"}}
 CODEX_SHELL = {"toolCallId": "x1", "title": "Run command", "kind": "execute",
                "rawInput": {"command": '"python3 skills/x.py --out outbox/a.json"', "cwd": WS}}
+# Codex는 여러 줄 명령을 감쌀 때 줄바꿈을 그대로 둔다(2026-10-21 실제 요청에서 줄임).
+CODEX_MULTILINE = {"toolCallId": "x2", "title": "Run command", "kind": "execute",
+                   "rawInput": {"command": '"python3 skills/x.py --out outbox/a.json <<\'JSON\'\n'
+                                           '{\n  \\"메모 날짜\\": null\n}\nJSON"', "cwd": WS}}
 
 
 class ToolRequestTest(unittest.TestCase):
@@ -66,6 +70,12 @@ class ToolRequestTest(unittest.TestCase):
             with self.subTest(engine=request.engine):
                 self.assertEqual((request.kind, request.url), ("fetch", "https://example.com"))
                 self.assertEqual(request.label, "인터넷")
+
+    def test_codex_multiline_command_is_unquoted(self):
+        request = tool_request(CODEX_MULTILINE, "codex", WS)
+        self.assertEqual(request.command,
+                         "python3 skills/x.py --out outbox/a.json <<'JSON'\n{\n  \"메모 날짜\": null\n}\nJSON")
+        self.assertTrue(request.command.startswith("python3 skills/"))
 
     def test_kind_is_guessed_when_missing(self):
         self.assertEqual(tool_request(KIRO_SHELL, "kiro", WS).kind, "execute")
