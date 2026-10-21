@@ -36,6 +36,7 @@ ACP_STOPS = {"end_turn": "done", "max_tokens": "limit", "max_turn_requests": "li
              "refusal": "refusal", "cancelled": "cancelled"}
 STOP_LABELS = {"done": "끝", "limit": "한도에 닿아 멈춤", "refusal": "엔진이 답하지 않기로 함", "cancelled": "멈춤"}
 URL = re.compile(r"https?://[^\s'\"<>|;)]+")
+MAX_FOLLOWUPS = 3    # 거절 뒤 멈춘 차례를 이어 가게 하는 최대 횟수
 
 
 class ToolRequest:
@@ -300,13 +301,16 @@ class AcpEngine:
             # 플랫폼 안내는 이 대화의 첫 질문에만 붙인다.
             text, self.preamble = f"{self.preamble}\n\n{text}", None
         self._turn = {"segments": [""], "tools": [], "refused": [], "notices": []}
-        stop = self._prompt(text)
-        if stop == "cancelled" and self._turn["refused"]:
-            # 거절하면 차례 전체를 멈추는 엔진이 있다(Codex). 다른 엔진처럼 이어서 하게 한 번 더 보낸다.
+        stop, refused_before, followups = self._prompt(text), 0, 0
+        # 거절하면 차례 전체를 멈추는 엔진이 있다(Codex). 다른 엔진처럼 이어서 하게 다시 보낸다.
+        # 새로 거절해서 멈췄을 때만, 그리고 MAX_FOLLOWUPS번까지만 한다.
+        while (stop == "cancelled" and len(self._turn["refused"]) > refused_before
+               and followups < MAX_FOLLOWUPS):
             notice = "엔진이 거절 뒤 차례를 멈춰서, 플랫폼이 거절을 알리고 이어서 하게 했다."
             self._turn["notices"].append(notice)
             self.on_notice(notice)
             self._turn["segments"].append("")
+            refused_before, followups = len(self._turn["refused"]), followups + 1
             stop = self._prompt(self.refusal_followup(self._turn["refused"]))
         turn, self._turn = self._turn, None
         usage = {"credits": self.credits or None, "contextTokens": self.context_tokens}

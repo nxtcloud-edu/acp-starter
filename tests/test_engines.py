@@ -128,6 +128,12 @@ class TurnResultTest(unittest.TestCase):
         self.assertIn("[플랫폼 알림] 방금 요청한 도구는 허락되지 않았다: 명령 실행 date", result.text)
         self.assertIsNone(result.usage["credits"])      # 크레딧은 Kiro만 알린다
 
+    def test_engine_is_asked_to_continue_after_each_new_refusal(self):
+        result = self.make(CodexEngine, "codex_twice").send("도구 써 줘")
+        self.assertEqual(result.stop, "done")
+        self.assertEqual(len(result.notices), 2)
+        self.assertEqual(len(result.refused), 2)
+
     def test_codex_prefers_decline_over_cancel(self):
         result = self.make(CodexEngine, "codex_decline").send("도구 써 줘")
         self.assertEqual((result.stop, result.notices), ("done", []))

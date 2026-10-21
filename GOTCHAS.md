@@ -25,7 +25,7 @@
 
 - 증상: 같은 요청에서 Kiro와 Claude는 거절된 단계를 건너뛰고 끝까지 보고했는데, Codex는 첫 거절 뒤 아무 말 없이 끝났다. 끝난 까닭(`stopReason`)이 `cancelled`였다. 사람 없는 일 실행의 결과도 엔진에 따라 달라졌다.
 - 근본 원인: codex-acp 2.2.2의 거절 선택지는 `decline`("No, continue without running it")과 `cancel`("No, and tell Codex what to do differently") 둘이다. 그런데 명령 실행 요청과 파일 고치기 요청에는 `cancel`만 준다. 플랫폼은 종류(`reject_once`)로 골랐으므로 `cancel`을 골랐고, `cancel`은 차례를 멈춘다.
-- 해결: `engines/codex.py`가 `decline`이 있으면 먼저 고른다. 없어서 차례가 멈추면 `engines/base.py`의 `send`가 거절된 도구를 알리고 "그 도구 없이 이어서 하라"고 한 번 더 보낸다. 플랫폼은 그 사실을 알림(`notice`)으로 남긴다.
+- 해결: `engines/codex.py`가 `decline`이 있으면 먼저 고른다. 없어서 차례가 멈추면 `engines/base.py`의 `send`가 거절된 도구를 알리고 "그 도구 없이 이어서 하라"고 다시 보낸다. 플랫폼은 그 사실을 알림(`notice`)으로 남긴다. 처음에는 한 번만 이어 가게 해서, 이어 가던 Codex가 다른 도구(`curl`)를 거절당하자 다시 멈췄다. 그래서 새로 거절해서 멈출 때마다, 최대 3번(`MAX_FOLLOWUPS`)까지 이어 가게 고쳤다.
 - 교훈: 같은 이름의 선택(거절)이 엔진마다 다른 결과를 낼 수 있다. 엔진의 차이는 엔진 층에서 맞추고, 플랫폼이 받는 결과(TurnResult)는 같은 꼴로 만든다.
 
 ## Codex는 허락을 묻지 않고 웹을 검색했다 (2026-10-21)

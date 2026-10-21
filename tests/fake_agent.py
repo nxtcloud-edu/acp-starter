@@ -4,6 +4,7 @@
 환경변수 FAKE_STYLE: 비우면 거절해도 계속한다(Kiro, Claude처럼).
   codex          거절 선택지가 cancel뿐이고, 거절하면 차례를 멈춘다(Codex처럼).
   codex_decline  거절 선택지가 cancel과 decline 둘이다. decline이면 계속한다.
+  codex_twice    codex와 같고, 첫 이어 묻기에서도 도구를 한 번 더 요청한다.
 """
 
 import json
@@ -15,6 +16,7 @@ STYLE = os.environ.get("FAKE_STYLE", "")
 OPTIONS = {
     "": [{"optionId": "allow-once", "kind": "allow_once"}, {"optionId": "reject", "kind": "reject_once"}],
     "codex": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"}],
+    "codex_twice": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"}],
     "codex_decline": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"},
                       {"optionId": "decline", "kind": "reject_once"}],
 }
@@ -61,7 +63,10 @@ for line in sys.stdin:
             text = os.environ.get("FAKE_HOME_CHECK", "")
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "받음: "}})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
-        if "도구" in text and not text.startswith("[플랫폼 알림]"):
+        followup = text.startswith("[플랫폼 알림]")
+        if followup:
+            FOLLOWUPS = globals().get("FOLLOWUPS", 0) + 1
+        if ("도구" in text and not followup) or (STYLE == "codex_twice" and followup and FOLLOWUPS == 1):
             # 실제 엔진처럼 시작 알림에는 kind가 있고, 허락 요청에는 없다(Kiro와 같은 모양).
             update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date", "kind": "execute"})
             send({"id": "p1", "method": "session/request_permission", "params": {
