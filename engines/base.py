@@ -220,6 +220,7 @@ class AcpEngine:
         - kind가 비어 있으면 같은 도구의 시작 알림에서 본 kind(known_kind)를 쓴다(Kiro).
         - url이 있는데 kind가 "read"나 비어 있으면 "fetch"로 본다(Kiro의 웹 가져오기).
         - 명령은 kind가 "execute"일 때만 꺼낸다. Kiro의 파일 쓰기는 rawInput.command가 "create" 같은 하위 명령이다.
+        - 파일 경로는 locations, rawInput, content의 diff(ACP 표준, Codex의 파일 쓰기) 순서로 찾는다.
         """
         raw_input = tool_call.get("rawInput")
         raw_input = raw_input if isinstance(raw_input, dict) else {}
@@ -228,8 +229,10 @@ class AcpEngine:
         if url and kind in ("", "read", "other"):
             kind = "fetch"
         locations = tool_call.get("locations") or []
+        diffs = [c for c in (tool_call.get("content") or []) if isinstance(c, dict) and c.get("path")]
         path = str((locations[0] or {}).get("path", "") if locations else "") \
-            or str(raw_input.get("file_path") or raw_input.get("path") or "")
+            or str(raw_input.get("file_path") or raw_input.get("path") or "") \
+            or str(diffs[0]["path"] if diffs else "")
         command_value = raw_input.get("command") or raw_input.get("cmd")
         if not kind:
             if command_value and not path:
@@ -249,6 +252,17 @@ class AcpEngine:
                 pass
         return ToolRequest(self.name, kind, title=str(tool_call.get("title") or ""),
                            command=command, path=path, url=url, raw=tool_call)
+
+    def _fill_in(self, update):
+        """시작 알림에 없던 도구의 세부(명령, 파일)가 갱신 알림에 오면 채운다(Claude, Codex)."""
+        tools = self._turn["tools"]
+        at = next((i for i, t in enumerate(tools) if t.raw.get("toolCallId") == update.get("toolCallId")), None)
+        if at is None or not (update.get("rawInput") or update.get("locations")):
+            return
+        merged = dict(tools[at].raw)
+        merged.update({k: v for k, v in update.items() if v not in (None, {}, [], "")})
+        merged.pop("sessionUpdate", None)
+        tools[at] = self.tool_request(merged, self._kinds.get(update.get("toolCallId")))
 
     def on_extension(self, method, params):
         """엔진만의 확장 알림(이름이 _로 시작). 엔진마다 덮어쓴다. 기본은 무시한다."""
@@ -426,5 +440,7 @@ class AcpEngine:
                         self._turn["tools"].append(request)
                         self._turn["segments"].append("")   # 도구 앞뒤의 말은 따로 묶는다
                     self.on_tool(request)
+                elif self._turn is not None:
+                    self._fill_in(update)
             elif kind == "usage_update" and isinstance(update.get("used"), int):
                 self.context_tokens = update["used"]

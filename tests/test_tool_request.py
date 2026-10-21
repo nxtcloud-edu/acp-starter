@@ -89,6 +89,15 @@ class ToolRequestTest(unittest.TestCase):
                 self.assertEqual(request.url, "https://example.com")
         self.assertEqual(tool_request(CLAUDE_SHELL, "claude", WS).url, "")
 
+    def test_path_from_standard_diff_content(self):
+        # Codex의 파일 쓰기 시작 알림: 경로가 locations가 아니라 content의 diff에 있다(2026-10-21 실제 모양).
+        codex_edit = {"toolCallId": "x4", "title": "Editing files", "kind": "edit", "rawInput": None,
+                      "locations": None, "status": "in_progress",
+                      "content": [{"type": "diff", "oldText": None, "newText": "시험\n",
+                                   "path": f"{WS}/outbox/편집시험.txt", "_meta": {"kind": "add"}}]}
+        request = tool_request(codex_edit, "codex", WS)
+        self.assertEqual((request.kind, request.path, request.detail), ("edit", "outbox/편집시험.txt", "outbox/편집시험.txt"))
+
     def test_kind_is_guessed_when_missing(self):
         self.assertEqual(tool_request(KIRO_SHELL, "kiro", WS).kind, "execute")
         self.assertEqual(tool_request(KIRO_WRITE, "kiro", WS).kind, "edit")

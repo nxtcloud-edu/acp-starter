@@ -5,6 +5,7 @@
   codex          거절 선택지가 cancel뿐이고, 거절하면 차례를 멈춘다(Codex처럼).
   codex_decline  거절 선택지가 cancel과 decline 둘이다. decline이면 계속한다.
   codex_twice    codex와 같고, 첫 이어 묻기에서도 도구를 한 번 더 요청한다.
+  late_detail    도구의 세부를 시작 알림이 아니라 갱신 알림에 보낸다(Claude처럼).
 """
 
 import json
@@ -17,6 +18,7 @@ OPTIONS = {
     "": [{"optionId": "allow-once", "kind": "allow_once"}, {"optionId": "reject", "kind": "reject_once"}],
     "codex": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"}],
     "codex_twice": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"}],
+    "late_detail": [{"optionId": "allow-once", "kind": "allow_once"}, {"optionId": "reject", "kind": "reject_once"}],
     "codex_decline": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"},
                       {"optionId": "decline", "kind": "reject_once"}],
 }
@@ -68,7 +70,14 @@ for line in sys.stdin:
             FOLLOWUPS = globals().get("FOLLOWUPS", 0) + 1
         if ("도구" in text and not followup) or (STYLE == "codex_twice" and followup and FOLLOWUPS == 1):
             # 실제 엔진처럼 시작 알림에는 kind가 있고, 허락 요청에는 없다(Kiro와 같은 모양).
-            update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date", "kind": "execute"})
+            if STYLE == "late_detail":
+                # Claude처럼 시작 알림은 제목만 있고, 세부(rawInput)는 뒤의 갱신 알림에 온다.
+                update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Terminal", "kind": "execute",
+                        "rawInput": {}})
+                update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "date",
+                        "rawInput": {"command": "date"}})
+            else:
+                update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date", "kind": "execute"})
             send({"id": "p1", "method": "session/request_permission", "params": {
                 "sessionId": "s1",
                 "toolCall": {"toolCallId": "t1", "title": "Running: date", "rawInput": {"command": "date"}},

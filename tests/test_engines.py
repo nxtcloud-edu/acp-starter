@@ -134,6 +134,10 @@ class TurnResultTest(unittest.TestCase):
         self.assertEqual(len(result.notices), 2)
         self.assertEqual(len(result.refused), 2)
 
+    def test_tool_details_from_later_update_are_filled_in(self):
+        result = self.make(ClaudeEngine, "late_detail").send("도구 써 줘")
+        self.assertEqual([(t.kind, t.command, t.detail) for t in result.tools], [("execute", "date", "date")])
+
     def test_codex_prefers_decline_over_cancel(self):
         result = self.make(CodexEngine, "codex_decline").send("도구 써 줘")
         self.assertEqual((result.stop, result.notices), ("done", []))
