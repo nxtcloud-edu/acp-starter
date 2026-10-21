@@ -255,6 +255,20 @@ class DashboardTest(unittest.TestCase):
         status, body = self.call("GET", "/api/skills")
         self.assertEqual(body["skills"][0]["name"], "deadline")
 
+    def test_skill_detail_has_text_and_agents_using_it(self):
+        skill = self.root / "workspace" / "skills" / "deadline"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: deadline\ndescription: 마감 표\n---\n# 마감 표 만들기\n",
+                                        encoding="utf-8")
+        write_agent(self.root, "마감_정리", skills="deadline")
+        write_agent(self.root, "손으로", skills="없음")
+        status, body = self.call("GET", "/api/skills/deadline")
+        self.assertEqual(status, 200)
+        self.assertIn("# 마감 표 만들기", body["text"])
+        self.assertEqual(body["agents"], ["기본_도우미", "마감_정리"])   # 기본_도우미는 모든 스킬을 쓴다
+        status, _ = self.call("GET", "/api/skills/" + urllib.request.quote("없는스킬"))
+        self.assertEqual(status, 404)
+
     def test_outbox_lists_html_and_serves_it_sandboxed(self):
         outbox = self.root / "workspace" / "outbox"
         outbox.mkdir()

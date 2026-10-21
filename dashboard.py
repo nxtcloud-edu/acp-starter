@@ -443,6 +443,15 @@ class Platform:
     def skills(self):
         return {"skills": custom_loader.skills(self.workspace)}
 
+    def skill(self, name):
+        """스킬 하나의 SKILL.md와 그 스킬을 쓰는 에이전트."""
+        found = next((s for s in custom_loader.skills(self.workspace) if s["name"] == name), None)
+        if found is None:
+            raise ApiError(404, f"스킬 '{name}'이 없습니다.")
+        users = [a["name"] for a in custom_loader.agents(self.custom) if a["skills"] is None or name in a["skills"]]
+        text = (self.workspace / found["path"]).read_text(encoding="utf-8")
+        return {**found, "text": text, "agents": users}
+
 
 def make_handler(platform):
     class Handler(BaseHTTPRequestHandler):
@@ -495,6 +504,8 @@ def make_handler(platform):
                     return self.send_json(200, platform.brand())
                 if parts == ["api", "skills"]:
                     return self.send_json(200, platform.skills())
+                if len(parts) == 3 and parts[:2] == ["api", "skills"]:
+                    return self.send_json(200, platform.skill(parts[2]))
                 if parts == ["api", "events"]:
                     after = int(parse_qs(url.query).get("after", ["0"])[0])
                     events = platform.log.since(after)
