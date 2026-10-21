@@ -24,7 +24,7 @@
 
 | 층 | 파일 | 맡는 일 |
 |---|---|---|
-| 엔진 | `engines/base.py` | 공통 통역. 엔진을 샌드박스 홈(`.homes/<이름>/`)으로 실행하고, 안전 모드로 바꾸고, 메시지를 주고받고, `ToolRequest`와 `TurnResult`로 포장한다. 거절 뒤 멈춘 엔진을 이어 가게 한다 |
+| 엔진 | `engines/base.py` | 공통 통역. 엔진을 샌드박스 홈(`.homes/<이름>/`)으로 실행하고, 안전 모드로 바꾸고, 메시지를 주고받고, `ToolRequest`와 `TurnResult`로 포장한다. 올린 파일을 그 엔진이 받는 블록(그림 또는 파일 경로)으로 바꾼다. 거절 뒤 멈춘 엔진을 이어 가게 한다 |
 | 엔진 | `engines/kiro.py`, `claude.py`, `codex.py` | 엔진 하나씩. 실행 명령, 샌드박스 설정 파일, 안전 모드, 로그인, 그 엔진만의 모양 |
 | 엔진 | `engines/__init__.py` | 엔진 목록(`ENGINES`)과 `make`, `get`, `names` |
 | 플랫폼 | `custom_loader.py` | `custom/`와 `workspace/skills/`를 읽어 잇는다. 에이전트를 읽고 저장한다. 플랫폼 안내(첫 질문 앞에 붙는 글)를 만든다 |
@@ -34,7 +34,7 @@
 | 플랫폼 | `runner.py` | 사람 없이 일을 한 번 돌린다. 대시보드와 `run_once.py`가 함께 쓴다 |
 | 사용자 | `custom/` | `brand.json`(이름과 색), `업무.md`(모든 에이전트 공통 업무), `agents/`(에이전트), `rules.py`(허락 규칙), `deliver.py`(결과 보내기) |
 | 사용자 | `tasks/` | 일 파일(머리말 `agent`, `engine`, `time`) |
-| 사용자 | `workspace/` | 엔진의 작업 폴더. `skills/`, `자료/`, `outbox/`(결과함) |
+| 사용자 | `workspace/` | 엔진의 작업 폴더. `skills/`, `자료/`, `inbox/`(화면에서 올린 파일), `outbox/`(결과함) |
 | 시험 | `tests/` | 가짜 엔진(`fake_agent.py`)과 가짜 로그인(`fake_login.py`)으로 도는 테스트 |
 | 문서 | `만들_곳.md` | 바꿀 수 있는 곳의 지도. Kiro Crew의 비슷한 위치도 적혀 있다 |
 
@@ -54,7 +54,7 @@
 - Codex 관리 블록(`engines/codex.py`의 `MANAGED`)에서 웹 검색, Apps, 플러그인, 기억을 다시 켜지 않는다. 허락을 거치지 않는 도구와 엔진만의 기억이 생긴다.
 - Claude의 `settingSources: []`와 Codex의 `project_doc_max_bytes = 0`을 지우지 않는다. 지우면 플랫폼 안의 엔진이 사용자의 전역 설정이나 이 파일을 읽는다.
 - 로그인된 엔진의 로그인을 다시 시작하지 않는다. Codex는 시작하자마자 있던 로그인을 지운다(`GOTCHAS.md`).
-- `.homes/`(로그인 정보), `.env`(시크릿), `conversations/`(대화 기록)를 커밋하지 않는다. 시크릿은 코드와 문서에 적지 않고 `.env`에 둔다. 레포가 공개이면 대화 기록이 모두에게 보인다.
+- `.homes/`(로그인 정보), `.env`(시크릿), `conversations/`(대화 기록), `workspace/inbox/`(올린 파일)를 커밋하지 않는다. 시크릿은 코드와 문서에 적지 않고 `.env`에 둔다. 레포가 공개이면 대화 기록이 모두에게 보인다.
 - 대시보드를 `127.0.0.1` 밖으로 열지 않는다. 인증이 없다.
 
 ## 참고 레포: Kiro Crew

@@ -1,4 +1,5 @@
 workspace/outbox/
+workspace/inbox/
 __pycache__/
 .env
 .env.*

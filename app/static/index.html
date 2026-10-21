@@ -45,7 +45,11 @@
             <div id="log"></div>
             <form id="composer">
               <p id="composer-note" class="muted small" hidden></p>
+              <!-- 올린 파일. 보낼 때 질문에 붙는다. 파일은 workspace/inbox/에 있다 -->
+              <div id="tray" class="tray" hidden></div>
               <div class="composer-row">
+                <button type="button" id="attach" class="ghost attach" title="파일이나 사진 올리기. 끌어 놓거나 붙여 넣어도 된다">+</button>
+                <input type="file" id="file-input" multiple hidden>
                 <textarea id="text" rows="2" placeholder="에이전트에게 맡길 일을 적는다. Enter로 보내고, Shift+Enter로 줄을 바꾼다."></textarea>
                 <button type="submit" id="send">보내기</button>
               </div>

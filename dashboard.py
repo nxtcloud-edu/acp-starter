@@ -12,6 +12,7 @@ custom/의 파일(이름과 색, 업무, 허락 규칙, 결과 보내기)은 cus
 
 import datetime
 import json
+import mimetypes
 import pathlib
 import re
 import secrets
@@ -19,6 +20,7 @@ import shutil
 import sys
 import subprocess
 import threading
+import unicodedata
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -38,6 +40,8 @@ LOGIN_WAIT_SECONDS = 900
 SAFE_NAME = re.compile(r"[\w가-힣.\-]+")
 OUTBOX_TYPES = {".md": "text/markdown", ".json": "application/json", ".html": "text/html",
                 ".txt": "text/plain", ".csv": "text/csv"}
+UPLOAD_BYTES = 20 * 1024 * 1024   # 올리는 파일 하나의 크기 상한
+MAX_FILES = 10                    # 질문 하나에 붙이는 파일 수의 상한
 # 로그인 명령의 출력에서 색과 링크 표시(ANSI 이스케이프)를 지우고 주소와 기기 코드를 찾는다.
 ANSI = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]")
 URL = re.compile(r"https://[^\s\x07\x1b]+")
@@ -53,6 +57,25 @@ class ApiError(Exception):
 def check_login(name):
     """엔진의 샌드박스 로그인 상태. 알 수 없으면 None."""
     return engines.get(name).check_login()
+
+
+def clean_name(name):
+    """올린 파일의 이름을 작업 폴더에 둘 수 있는 이름으로 바꾼다. 폴더는 떼고, 쓸 수 없는 글자는 _로 바꾼다.
+
+    macOS가 한글 이름을 풀어 쓴 꼴(NFD)로 보내도 붙여 쓴 꼴(NFC)로 맞춘다. 에이전트가 경로를 같게 쓰게 하려는 것이다.
+    """
+    name = unicodedata.normalize("NFC", re.split(r"[\\/]", str(name or ""))[-1])
+    name = re.sub(r"[^\w.\-]+", "_", name).lstrip(".")
+    stem, dot, suffix = name.rpartition(".")
+    if dot and stem:
+        name = f"{stem[:100]}.{suffix[:10]}"
+    return name[:120] or "file"
+
+
+def file_info(path):
+    """올린 파일 하나의 정보. path는 작업 폴더 기준 경로다."""
+    return {"name": path.name, "path": f"inbox/{path.name}", "url": f"/inbox/{path.name}",
+            "type": mimetypes.guess_type(path.name)[0] or "application/octet-stream", "size": path.stat().st_size}
 
 
 def tool_line(request):
@@ -343,10 +366,14 @@ class Platform:
         if old:
             old.close()
 
-    def prompt(self, conversation_id, text):
-        """대화에 질문을 보낸다. 답은 사건으로 오고, 끝나면 대화 기록에 남는다."""
+    def prompt(self, conversation_id, text, files=None):
+        """대화에 질문을 보낸다. 답은 사건으로 오고, 끝나면 대화 기록에 남는다.
+
+        files: 올린 파일의 작업 폴더 기준 경로(inbox/<이름>). 엔진 층이 그 엔진에 맞는 꼴로 보낸다.
+        """
         text = str(text or "").strip()
-        if not text:
+        files = self._attachments(files)
+        if not text and not files:
             raise ApiError(400, "보낼 내용이 없습니다.")
         conversation = self.conversation(conversation_id)
         definition, engine = self._agent_and_engine(conversation["agent"], conversation["engine"])
@@ -361,19 +388,19 @@ class Platform:
             self.partial = []
         if old:
             old.close()
-        self._record(conversation_id, {"role": "user", "text": text})
-        self._event("user", text=text)
+        self._record(conversation_id, {"role": "user", "text": text, **({"files": files} if files else {})})
+        self._event("user", text=text, files=files)
         self._event("status", state=self.state, agent=self.agent, engine=engine)
         threading.Thread(target=self._turn, daemon=True,
-                         args=(conversation_id, definition, engine, conversation["messages"], text, reuse)).start()
+                         args=(conversation_id, definition, engine, conversation["messages"], text, files, reuse)).start()
 
-    def _turn(self, conversation_id, definition, engine, history, text, reuse):
+    def _turn(self, conversation_id, definition, engine, history, text, files, reuse):
         """질문 하나를 엔진에 보낸다. 엔진이 어떤 꼴로 답하든 하나의 형식(TurnResult)으로 받아 기록과 화면에 쓴다."""
         client, result, error = self.client if reuse else None, None, None
         try:
             if client is None:
                 client = self._open(conversation_id, definition, engine, history)
-            result = client.send(text)
+            result = client.send(custom_loader.with_files(text, files), [self.workspace / path for path in files])
         except Exception as failure:  # 엔진 오류든 코드의 버그든 기록하고, 다음 질문을 받을 수 있게 한다
             error = failure
         if result is not None:
@@ -518,6 +545,52 @@ class Platform:
         while not stop.wait(SCHEDULER_SECONDS):
             self.tick()
 
+    # ---- 올린 파일 ----
+    #
+    # 사람이 올린 파일은 workspace/inbox/에 둔다. 엔진이 일하는 폴더 안이라서 엔진도 경로로 읽을 수 있다.
+
+    def upload(self, name, data):
+        """파일 하나를 workspace/inbox/에 저장한다. 같은 이름이 있으면 덮어쓰지 않고 뒤에 -2, -3을 붙인다."""
+        folder = self.workspace / "inbox"
+        folder.mkdir(parents=True, exist_ok=True)
+        clean = clean_name(name)
+        stem, dot, suffix = clean.rpartition(".")
+        if not stem:
+            stem, dot, suffix = clean, "", ""
+        path, number = folder / clean, 1
+        while True:
+            try:
+                with open(path, "xb") as out:
+                    out.write(data)
+                return file_info(path)
+            except FileExistsError:
+                number += 1
+                path = folder / f"{stem}-{number}{dot}{suffix}"
+
+    def inbox_path(self, name):
+        path = self.workspace / "inbox" / name
+        if not SAFE_NAME.fullmatch(name) or name.startswith(".") or not path.is_file():
+            raise ApiError(404, "그런 파일이 없습니다.")
+        return path
+
+    def _attachments(self, files):
+        """질문에 붙인 파일(inbox/<이름>)이 실제로 올린 파일인지 확인한다."""
+        if not files:
+            return []
+        if not isinstance(files, list) or len(files) > MAX_FILES:
+            raise ApiError(400, f"파일은 질문 하나에 {MAX_FILES}개까지 붙입니다.")
+        checked = []
+        for item in files:
+            folder, _, name = str(item).partition("/")
+            if folder != "inbox":
+                raise ApiError(400, f"올린 파일 '{item}'을 찾지 못했습니다. 먼저 올립니다.")
+            try:
+                self.inbox_path(name)
+            except ApiError:
+                raise ApiError(400, f"올린 파일 '{item}'을 찾지 못했습니다. 먼저 올립니다.")
+            checked.append(f"inbox/{name}")
+        return checked
+
     # ---- 결과함 ----
 
     def outbox(self):
@@ -582,9 +655,15 @@ def make_handler(platform):
             data = path.read_bytes()
             self.send_response(200)
             if sandbox:
-                # 에이전트가 만든 파일은 대시보드의 API를 부르지 못하게 따로 떼어 연다.
+                # 에이전트가 만든 파일과 사람이 올린 파일은 대시보드의 API를 부르지 못하게 따로 떼어 연다.
                 self.send_header("Content-Security-Policy", "sandbox")
-            self.send_header("Content-Type", types.get(path.suffix, "application/octet-stream") + "; charset=utf-8")
+                self.send_header("X-Content-Type-Options", "nosniff")
+            kind = types.get(path.suffix.lower())
+            if kind:
+                kind += "; charset=utf-8"
+            else:
+                kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -600,6 +679,8 @@ def make_handler(platform):
                     return self.send_file(STATIC / parts[1])
                 if len(parts) == 2 and parts[0] == "outbox":
                     return self.send_file(platform.outbox_path(parts[1]), sandbox=True)
+                if len(parts) == 2 and parts[0] == "inbox":
+                    return self.send_file(platform.inbox_path(parts[1]), sandbox=True)
                 if parts == ["api", "engines"]:
                     return self.send_json(200, platform.engines())
                 if parts == ["api", "agents"]:
@@ -633,14 +714,30 @@ def make_handler(platform):
             except ApiError as error:
                 self.send_json(error.status, {"error": str(error)})
 
+        def read_upload(self):
+            """올리는 파일의 본문(파일 그대로)을 읽는다. 너무 크면 다 읽어 버린 뒤 413으로 거절한다."""
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > UPLOAD_BYTES:
+                while length > 0:
+                    chunk = self.rfile.read(min(length, 1024 * 1024))
+                    if not chunk:
+                        break
+                    length -= len(chunk)
+                raise ApiError(413, f"파일이 너무 큽니다. {UPLOAD_BYTES // (1024 * 1024)}MB까지 올립니다.")
+            return self.rfile.read(length)
+
         def do_POST(self):
-            parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
+            url = urlparse(self.path)
+            parts = [unquote(p) for p in url.path.split("/") if p]
             try:
+                if parts == ["api", "uploads"]:
+                    name = parse_qs(url.query).get("name", [""])[0]
+                    return self.send_json(201, platform.upload(name, self.read_upload()))
                 body = self.read_json()
                 if parts == ["api", "conversations"]:
                     return self.send_json(201, platform.create_conversation(body.get("agent"), body.get("engine")))
                 if len(parts) == 4 and parts[:2] == ["api", "conversations"] and parts[3] == "prompt":
-                    platform.prompt(parts[2], body.get("text"))
+                    platform.prompt(parts[2], body.get("text"), body.get("files"))
                     return self.send_json(202, {"ok": True})
                 if parts == ["api", "agents"]:
                     return self.send_json(201, platform.save_agent(body, create=True))

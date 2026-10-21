@@ -163,6 +163,17 @@ class CustomLoaderTest(unittest.TestCase):
                    {"role": "agent", "text": "  "}]
         self.assertEqual(custom_loader.history_lines(history), ["[사용자] 하나", "[에이전트] 답 하나"])
 
+    def test_files_are_listed_under_the_request_and_in_history(self):
+        files = ["inbox/메모.jpg", "inbox/표.csv"]
+        text = custom_loader.with_files("정리해 줘", files)
+        self.assertEqual(text, "정리해 줘\n\n" + custom_loader.FILES_NOTE + "\n- inbox/메모.jpg\n- inbox/표.csv")
+        self.assertTrue(custom_loader.with_files("", files).startswith(custom_loader.FILES_NOTE))
+        self.assertEqual(custom_loader.with_files("그대로", []), "그대로")
+        history = [{"role": "user", "text": "정리해 줘", "files": files}, {"role": "user", "text": "", "files": files[:1]}]
+        self.assertEqual(custom_loader.history_lines(history),
+                         ["[사용자] 정리해 줘 (올린 파일: inbox/메모.jpg, inbox/표.csv)", "[사용자] (올린 파일: inbox/메모.jpg)"])
+        self.assertIn("- 사용자가 올린 파일은 `inbox/`에 있다.", custom_loader.preamble(self.workspace, self.custom))
+
     def test_preamble_carries_history_before_the_end_line(self):
         text = custom_loader.preamble(self.workspace, self.custom,
                                       history=[{"role": "user", "text": "앞의 질문"}])

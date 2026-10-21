@@ -8,7 +8,7 @@
   {"id", "title", "agent", "engine", "created", "updated", "messages": [메시지, ...]}
 
 메시지의 role과 칸(모두 text와 at이 있다):
-  user      사람의 질문
+  user      사람의 질문. 올린 파일이 있으면 files(작업 폴더 기준 경로. 예: inbox/메모.jpg)
   agent     에이전트의 답. engine, stop, stopLabel, usage, tools, refused, notices
   note      플랫폼이 남긴 알림. 예: 엔진을 바꿨다. error가 true이면 오류
   preamble  엔진 세션을 새로 열 때 첫 질문 앞에 붙인 플랫폼 안내. engine, history(넣은 앞의 대화 수)
@@ -99,7 +99,8 @@ class ConversationStore:
             conversation["messages"].append(message)
             conversation["updated"] = message["at"]
             if not conversation["title"] and message["role"] == "user":
-                conversation["title"] = title_of(message.get("text"))
+                names = " ".join(path.rsplit("/", 1)[-1] for path in message.get("files", []))
+                conversation["title"] = title_of(message.get("text")) or title_of(names)
             self._save(conversation)
             return conversation
 

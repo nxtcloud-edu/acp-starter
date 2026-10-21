@@ -1,7 +1,7 @@
 """엔진 층의 바탕: ACP로 엔진 프로그램과 이야기하는 공통 코드.
 
 플랫폼과 엔진 사이의 통역이다.
-- 플랫폼 → 엔진: 플랫폼의 질문과 허락 여부를 그 엔진이 받는 ACP 메시지로 바꿔 보낸다.
+- 플랫폼 → 엔진: 플랫폼의 질문(글과 올린 파일)과 허락 여부를 그 엔진이 받는 ACP 메시지로 바꿔 보낸다.
 - 엔진 → 플랫폼: 엔진마다 다른 메시지(답 조각, 도구 요청, 쓴 양, 끝난 까닭)를 하나의 형식으로 포장해 넘긴다.
   하나의 형식은 ToolRequest(도구 하나)와 TurnResult(한 차례의 결과)다.
 
@@ -9,7 +9,9 @@
 메시지는 JSON 한 줄씩 표준 입출력으로 주고받는다(JSON-RPC 2.0).
 """
 
+import base64
 import json
+import mimetypes
 import os
 import pathlib
 import re
@@ -37,6 +39,8 @@ ACP_STOPS = {"end_turn": "done", "max_tokens": "limit", "max_turn_requests": "li
 STOP_LABELS = {"done": "끝", "limit": "한도에 닿아 멈춤", "refusal": "엔진이 답하지 않기로 함", "cancelled": "멈춤"}
 URL = re.compile(r"https?://[^\s'\"<>|;)]+")
 MAX_FOLLOWUPS = 3    # 거절 뒤 멈춘 차례를 이어 가게 하는 최대 횟수
+# 그림 블록으로 보낼 수 있는 사진의 종류. 다른 파일은 파일 경로(resource_link)로 보낸다.
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 
 class ToolRequest:
@@ -119,6 +123,7 @@ class AcpEngine:
     logout = []                # 로그아웃 명령. 비면 화면에서 로그아웃하지 않는다
     status = []                # 로그인 상태를 보는 명령
     login_mode = "terminal"    # device(기기 코드), code(코드 붙여 넣기), terminal(터미널에서)
+    max_image_bytes = 3_500_000   # 이보다 큰 사진은 그림으로 보내지 않고 경로로 보낸다. 큰 그림은 엔진이 거절한다
 
     def __init__(self, workspace, on_text=None, on_tool=None, on_permission=None, on_notice=None,
                  preamble=None, command=None, env=None):
@@ -141,6 +146,7 @@ class AcpEngine:
         self.session_id = None
         self.credits = 0.0
         self.context_tokens = None
+        self.prompt_capabilities = {}   # 엔진이 initialize에서 알린 질문의 형식. 예: {"image": True}
         self._next_id = 0
         self._kinds = {}             # 도구 번호 → 시작 알림에서 본 kind
         self._turn = None            # 지금 차례의 기록: segments, tools, refused, notices
@@ -199,6 +205,22 @@ class AcpEngine:
         """허락 요청의 선택지에서 고른다. 선택지 이름은 엔진마다 달라서 종류(kind)로 고른다."""
         wanted = "allow_once" if allow else "reject_once"
         return next((o["optionId"] for o in options if o.get("kind") == wanted), None)
+
+    def file_block(self, path):
+        """올린 파일 하나를 이 엔진이 받는 ACP 내용 블록으로 바꾼다.
+
+        그림을 받는다고 알린 엔진(promptCapabilities.image)에는 사진을 그림 블록으로 보낸다.
+        다른 파일과 큰 사진은 파일 경로(resource_link)로 보낸다. ACP는 모든 엔진이 resource_link를 받게 정했다.
+        """
+        path = pathlib.Path(path)
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        size = path.stat().st_size
+        if mime in IMAGE_TYPES and self.prompt_capabilities.get("image"):
+            if size <= self.max_image_bytes:
+                return {"type": "image", "mimeType": mime, "data": base64.b64encode(path.read_bytes()).decode("ascii")}
+            self._notice(f"사진 {path.name}이 커서({size / 1_000_000:.1f}MB) 그림으로 보내지 않고 파일 경로로 보냈다.")
+        return {"type": "resource_link", "uri": path.resolve().as_uri(), "name": path.name, "mimeType": mime,
+                "size": size}
 
     def refusal_followup(self, refused):
         """거절 뒤 차례를 멈춘 엔진에게 보낼 글. 다른 엔진처럼 이어서 하게 한다."""
@@ -287,7 +309,8 @@ class AcpEngine:
             bufsize=1,
         )
         # 1) 플랫폼이 무엇을 해 줄 수 있는지 알린다. 파일과 터미널은 엔진이 스스로 다룬다.
-        self._request("initialize", {
+        #    엔진은 받을 수 있는 질문의 형식(그림, 소리, 파일 내용)을 알려 준다.
+        result = self._request("initialize", {
             "protocolVersion": 1,
             "clientCapabilities": {
                 "fs": {"readTextFile": False, "writeTextFile": False},
@@ -295,6 +318,7 @@ class AcpEngine:
             },
             "clientInfo": {"name": "acp-starter", "version": "0.4.0"},
         })
+        self.prompt_capabilities = (result.get("agentCapabilities") or {}).get("promptCapabilities") or {}
         # 2) 대화 하나를 연다.
         params = {"cwd": self.workspace, "mcpServers": []}
         meta = self.session_meta()
@@ -309,20 +333,21 @@ class AcpEngine:
         if self.safe_mode:
             self._request("session/set_mode", {"sessionId": self.session_id, "modeId": self.safe_mode})
 
-    def send(self, text):
-        """질문 하나를 보내고, 이번 차례가 끝나면 결과를 TurnResult(하나의 형식)로 돌려준다."""
+    def send(self, text, files=()):
+        """질문 하나를 보내고, 이번 차례가 끝나면 결과를 TurnResult(하나의 형식)로 돌려준다.
+
+        files: 질문과 함께 보낼 파일의 경로. 엔진에 맞는 블록으로 바꿔 보낸다(file_block).
+        """
         if self.preamble:
             # 플랫폼 안내는 이 대화의 첫 질문에만 붙인다.
             text, self.preamble = f"{self.preamble}\n\n{text}", None
         self._turn = {"segments": [""], "tools": [], "refused": [], "notices": []}
-        stop, refused_before, followups = self._prompt(text), 0, 0
+        stop, refused_before, followups = self._prompt(text, files), 0, 0
         # 거절하면 차례 전체를 멈추는 엔진이 있다(Codex). 다른 엔진처럼 이어서 하게 다시 보낸다.
         # 새로 거절해서 멈췄을 때만, 그리고 MAX_FOLLOWUPS번까지만 한다.
         while (stop == "cancelled" and len(self._turn["refused"]) > refused_before
                and followups < MAX_FOLLOWUPS):
-            notice = "엔진이 거절 뒤 차례를 멈춰서, 플랫폼이 거절을 알리고 이어서 하게 했다."
-            self._turn["notices"].append(notice)
-            self.on_notice(notice)
+            self._notice("엔진이 거절 뒤 차례를 멈춰서, 플랫폼이 거절을 알리고 이어서 하게 했다.")
             self._turn["segments"].append("")
             refused_before, followups = len(self._turn["refused"]), followups + 1
             stop = self._prompt(self.refusal_followup(self._turn["refused"]))
@@ -330,12 +355,16 @@ class AcpEngine:
         usage = {"credits": self.credits or None, "contextTokens": self.context_tokens}
         return TurnResult(self.name, stop, turn["segments"], turn["tools"], turn["refused"], turn["notices"], usage)
 
-    def _prompt(self, text):
-        result = self._request("session/prompt", {
-            "sessionId": self.session_id,
-            "prompt": [{"type": "text", "text": text}],
-        })
+    def _prompt(self, text, files=()):
+        blocks = [{"type": "text", "text": text}] + [self.file_block(path) for path in files]
+        result = self._request("session/prompt", {"sessionId": self.session_id, "prompt": blocks})
         return ACP_STOPS.get(result.get("stopReason"), result.get("stopReason"))
+
+    def _notice(self, text):
+        """플랫폼이 엔진의 다른 점을 맞추며 한 일을 이번 차례의 알림으로 남기고 알린다."""
+        if self._turn is not None:
+            self._turn["notices"].append(text)
+        self.on_notice(text)
 
     def close(self):
         if self.process is None:

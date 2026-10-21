@@ -17,6 +17,7 @@ const S = {
   convData: null,        // 고른 대화 전체(메시지 포함)
   draft: null,           // 새 대화의 {agent, engine}
   confirmDelete: false,  // 대화 지우기를 한 번 누른 상태
+  attached: [],          // 올린 파일: {key, name, size, status(uploading, done, error), path, preview, note}
   run: { state: "idle", agent: null, engine: null, conversation: null },   // 서버가 열어 둔 엔진 세션
   live: { conversation: null, events: [] },   // 답을 쓰는 중인 차례의 사건(답 조각, 도구, 허락 카드)
   selected: { agents: null, skills: null, tasks: null, outbox: null },
@@ -278,7 +279,7 @@ function renderLog() {
 
 // 대화 기록의 메시지 하나(conversations.py의 꼴)를 그린다.
 function renderMessage(m) {
-  if (m.role === "user") return add("user", m.text);
+  if (m.role === "user") return userMessage(m.text, m.files);
   if (m.role === "preamble") return preambleNote(m);
   if (m.role === "note") return add(m.error ? "note error" : "note", m.text);
   if (m.role !== "agent") return;
@@ -296,7 +297,7 @@ function renderMessage(m) {
 function renderComposer() {
   const who = S.convData || S.draft;
   const other = busy() && S.run.conversation !== S.conv;
-  $("send").disabled = !who || busy();
+  $("send").disabled = !who || busy() || S.attached.some((f) => f.status === "uploading");
   const note = !who ? (S.conv ? "" : "에이전트가 없다. 에이전트 메뉴에서 만든다.")
     : other ? "다른 대화에서 답을 쓰는 중이다. 그 답이 끝나면 보낼 수 있다." : "";
   $("composer-note").textContent = note;
@@ -719,12 +720,138 @@ function renderLive(event) {
   }
 }
 
+// ---- 파일 올리기: + 단추, 끌어 놓기, 붙여 넣기 ----
+// 고르면 바로 /api/uploads로 올린다(workspace/inbox/). 보낼 때 그 경로를 질문에 붙인다.
+// 큰 사진은 올리기 전에 화면에서 줄인다(긴 변 2000px). 엔진은 큰 그림을 받지 않는다.
+
+const IMAGE = /\.(png|jpe?g|gif|webp)$/i;          // 엔진에 그림으로 가는 사진
+const SHOWABLE = /^image\/(png|jpeg|gif|webp)$/;    // 화면에서 미리 볼 수 있는 사진
+const MAX_SIDE = 2000;
+const SHRINK_BYTES = 1500 * 1000;
+const size = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1e3))}KB`);
+
+async function shrink(file) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return { file };
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); } catch (e) { return { file }; }
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  if (scale === 1 && file.size <= SHRINK_BYTES) return { file };
+  const canvas = el("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";                            // 투명한 곳은 흰 바탕으로
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+  if (!blob || blob.size >= file.size) return { file };
+  const name = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+  return { file: new File([blob], name, { type: "image/jpeg" }), note: `줄여서 올림 ${size(file.size)} → ${size(blob.size)}` };
+}
+
+async function addFiles(list) {
+  for (const original of list) {
+    const item = { key: Math.random().toString(36).slice(2), name: original.name, size: original.size, status: "uploading" };
+    if (SHOWABLE.test(original.type)) item.preview = URL.createObjectURL(original);
+    S.attached.push(item);
+    renderTray(); renderComposer();
+    try {
+      const { file, note } = await shrink(original);
+      const res = await fetch(`/api/uploads?name=${encodeURIComponent(file.name)}`,
+                              { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      const warn = /^image\/(heic|heif)$/.test(original.type) ? "HEIC 사진은 엔진이 그림으로 받지 못한다. JPG로 바꿔 올린다" : "";
+      Object.assign(item, { status: "done", path: data.path, name: data.name, size: data.size, note: warn || note });
+    } catch (e) {
+      Object.assign(item, { status: "error", note: e.message });
+    }
+    renderTray(); renderComposer();
+  }
+}
+
+function renderTray() {
+  const tray = $("tray");
+  tray.innerHTML = "";
+  tray.hidden = !S.attached.length;
+  for (const item of S.attached) {
+    const chip = el("div", "file-chip" + (item.status === "error" ? " error" : ""));
+    if (item.preview) { const img = el("img"); img.src = item.preview; img.alt = ""; chip.append(img); }
+    else chip.append(el("span", "ext", (item.name.includes(".") ? item.name.split(".").pop() : "파일").slice(0, 4).toUpperCase()));
+    const state = item.status === "uploading" ? "올리는 중…" : item.status === "error" ? item.note
+      : [size(item.size), item.note].filter(Boolean).join(" · ");
+    const info = el("div", "info");
+    info.append(el("b", "", item.name), el("span", "", state));
+    const remove = button("×", () => removeAttached(item.key));
+    remove.title = "빼기";
+    chip.append(info, remove);
+    tray.appendChild(chip);
+  }
+}
+
+function removeAttached(key) {
+  for (const item of S.attached) if (item.key === key && item.preview) URL.revokeObjectURL(item.preview);
+  S.attached = S.attached.filter((item) => item.key !== key);
+  renderTray(); renderComposer();
+}
+
+function clearAttached() {
+  for (const item of S.attached) if (item.preview) URL.revokeObjectURL(item.preview);
+  S.attached = [];
+  renderTray(); renderComposer();
+}
+
+// 사람의 질문 칸. 올린 파일이 있으면 사진은 작게 보이고, 다른 파일은 이름이 보인다. 누르면 새 탭에서 열린다.
+function userMessage(text, files) {
+  const div = add("user", text || "");
+  if (!files || !files.length) return div;
+  const box = el("div", "files");
+  for (const path of files) {
+    const name = path.split("/").pop();
+    const link = el("a", IMAGE.test(name) ? "" : "file", IMAGE.test(name) ? undefined : name);
+    link.href = "/" + path.split("/").map(encodeURIComponent).join("/");
+    link.target = "_blank";
+    link.title = path;
+    if (IMAGE.test(name)) {
+      const img = el("img");
+      img.src = link.href; img.alt = name;
+      img.onload = scrollDown;
+      link.append(img);
+    }
+    box.appendChild(link);
+  }
+  div.appendChild(box);
+  return div;
+}
+
+$("attach").onclick = () => $("file-input").click();
+$("file-input").onchange = () => { addFiles([...$("file-input").files]); $("file-input").value = ""; };
+$("text").addEventListener("paste", (event) => {
+  const files = [...((event.clipboardData && event.clipboardData.files) || [])];
+  if (files.length) { event.preventDefault(); addFiles(files); }   // 글을 붙여 넣을 때는 그대로 둔다
+});
+const chatBox = document.querySelector(".chat");
+chatBox.addEventListener("dragover", (event) => {
+  if (![...event.dataTransfer.types].includes("Files")) return;
+  event.preventDefault();
+  chatBox.classList.add("dragging");
+});
+chatBox.addEventListener("dragleave", (event) => {
+  if (!chatBox.contains(event.relatedTarget)) chatBox.classList.remove("dragging");
+});
+chatBox.addEventListener("drop", (event) => {
+  event.preventDefault();
+  chatBox.classList.remove("dragging");
+  addFiles([...event.dataTransfer.files]);
+});
+
 // ---- 보내기 ----
 
 $("composer").onsubmit = async (event) => {
   event.preventDefault();
   const text = $("text").value.trim();
-  if (!text || busy()) return;
+  const files = S.attached.filter((f) => f.status === "done").map((f) => f.path);
+  if ((!text && !files.length) || busy() || S.attached.some((f) => f.status === "uploading")) return;
   try {
     if (!S.conv) {
       if (!S.draft) return;
@@ -732,8 +859,9 @@ $("composer").onsubmit = async (event) => {
       S.conv = created.id; S.convData = created; S.draft = null;
       renderChat();
     }
-    await api("POST", `/api/conversations/${S.conv}/prompt`, { text });
+    await api("POST", `/api/conversations/${S.conv}/prompt`, { text, files });
     $("text").value = "";
+    clearAttached();
   } catch (e) { report(e); }
 };
 
@@ -773,7 +901,7 @@ function handle(event) {
   switch (event.type) {
     case "user":
       S.live = { conversation: event.conversation, events: [] };
-      if (shown) { add("user", event.text); answer = null; }
+      if (shown) { userMessage(event.text, event.files); answer = null; }
       refresh(loadConversations);
       break;
     case "preamble":

@@ -6,6 +6,9 @@
   codex_decline  거절 선택지가 cancel과 decline 둘이다. decline이면 계속한다.
   codex_twice    codex와 같고, 첫 이어 묻기에서도 도구를 한 번 더 요청한다.
   late_detail    도구의 세부를 시작 알림이 아니라 갱신 알림에 보낸다(Claude처럼).
+  no_image       그림을 받는다고 알리지 않는다(promptCapabilities.image가 없다).
+
+질문에 글 말고 다른 블록(그림, 파일 경로)이 있으면 답 끝에 " / 블록 종류:내용"을 붙인다.
 """
 
 import json
@@ -43,7 +46,8 @@ for line in sys.stdin:
     message = json.loads(line)
     method, rid = message.get("method"), message.get("id")
     if method == "initialize":
-        send({"id": rid, "result": {"protocolVersion": 1}})
+        capabilities = {} if STYLE == "no_image" else {"promptCapabilities": {"image": True}}
+        send({"id": rid, "result": {"protocolVersion": 1, "agentCapabilities": capabilities}})
     elif method == "session/new":
         META = message["params"].get("_meta")
         send({"method": "_kiro.dev/commands/available", "params": {"commands": []}})
@@ -52,7 +56,9 @@ for line in sys.stdin:
         MODE = message["params"]["modeId"]
         send({"id": rid, "result": {}})
     elif method == "session/prompt":
-        text = message["params"]["prompt"][0]["text"]
+        blocks = message["params"]["prompt"]
+        text = blocks[0]["text"]
+        others = [f"{b['type']}:{b.get('mimeType') if b['type'] == 'image' else b.get('name')}" for b in blocks[1:]]
         had_preamble = PREAMBLE_END in text
         text = text.split(PREAMBLE_END)[-1].strip()
         if text == "안내":
@@ -65,6 +71,9 @@ for line in sys.stdin:
             text = os.environ.get("FAKE_HOME_CHECK", "")
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "받음: "}})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
+        if others:
+            update({"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": " / 블록 " + ", ".join(others)}})
         followup = text.startswith("[플랫폼 알림]")
         if followup:
             FOLLOWUPS = globals().get("FOLLOWUPS", 0) + 1

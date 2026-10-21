@@ -116,6 +116,25 @@ details.msg { cursor: pointer; }
 #composer p { margin: 0; }
 .composer-row { display: flex; gap: 8px; align-items: stretch; }
 .composer-row textarea { flex: 1; resize: none; min-width: 0; }
+.composer-row .attach { font-size: 22px; line-height: 1; padding: 0 14px; }
+
+/* 올린 파일: 입력칸 위의 칸과 대화 기록 안의 미리 보기 */
+.tray { display: flex; flex-wrap: wrap; gap: 8px; }
+.file-chip { display: flex; align-items: center; gap: 8px; max-width: 280px; padding: 4px 4px 4px 4px;
+             border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12px; }
+.file-chip.error { border-color: var(--warn); }
+.file-chip img, .file-chip .ext { width: 40px; height: 40px; border-radius: 5px; flex-shrink: 0; }
+.file-chip img { object-fit: cover; }
+.file-chip .ext { display: grid; place-items: center; background: var(--soft); color: var(--accent); font-size: 10px; font-weight: 700; }
+.file-chip .info { min-width: 0; }
+.file-chip .info b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.file-chip .info span { color: var(--sub); }
+.file-chip.error .info span { color: var(--warn); }
+.file-chip button { background: none; color: var(--sub); padding: 0 6px; font-size: 16px; }
+.chat.dragging #log { outline: 2px dashed var(--accent); outline-offset: -10px; }
+.msg .files { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; margin-top: 8px; white-space: normal; }
+.msg .files img { display: block; max-width: 200px; max-height: 150px; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
+.msg .files a.file { color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; text-decoration: none; }
 
 /* 결과함 미리 보기 */
 .viewer { width: 100%; height: calc(100% - 60px); min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-top: 10px; }

@@ -21,6 +21,8 @@ WORKSPACE = ROOT / "workspace"
 
 # 플랫폼 안내와 사람의 질문 사이에 넣는 줄. 에이전트는 이 줄 아래를 질문으로 읽는다.
 PREAMBLE_END = "[여기까지 플랫폼 안내. 아래가 사용자의 요청이다]"
+# 질문에 올린 파일이 있으면 질문 아래에 이 줄과 파일 경로를 붙인다.
+FILES_NOTE = "[올린 파일] 사용자가 이 요청과 함께 올린 파일이다. 경로는 작업 폴더 기준이다."
 
 # 도구를 쓰는 방법. 엔진마다 버릇이 달라서(셸로 파일 쓰기, 시도 없이 거절됐다고 답하기) 모든 엔진에 같은 규칙을 보낸다.
 TOOL_RULES = [
@@ -190,12 +192,14 @@ def history_lines(history):
     플랫폼의 알림과 앞서 보낸 플랫폼 안내는 넣지 않는다. 길면 오래된 것부터 뺀다.
     """
     names = {"user": "사용자", "agent": "에이전트"}
-    talk = [m for m in (history or []) if m.get("role") in names and (m.get("text") or "").strip()]
+    talk = [m for m in (history or []) if m.get("role") in names and ((m.get("text") or "").strip() or m.get("files"))]
     lines = []
     for message in talk[-HISTORY_MESSAGES:]:
-        text = message["text"].strip()
+        text = (message.get("text") or "").strip()
         if len(text) > MESSAGE_CHARS:
             text = text[:MESSAGE_CHARS] + " …(줄임)"
+        if message.get("files"):
+            text = f"{text} (올린 파일: {', '.join(message['files'])})".strip()
         lines.append(f"[{names[message['role']]}] {text}")
     while lines and sum(len(line) for line in lines) > HISTORY_CHARS:
         lines.pop(0)
@@ -205,6 +209,17 @@ def history_lines(history):
 def history_text(history):
     """플랫폼이 가진 앞의 대화를 안내에 넣을 글로 만든다."""
     return "\n\n".join(history_lines(history))
+
+
+def with_files(text, files):
+    """질문 아래에 올린 파일의 경로(작업 폴더 기준)를 붙인다.
+
+    파일의 내용(사진 등)은 엔진 층이 그 엔진이 받는 꼴로 따로 보낸다. 이 글은 어느 엔진이든 같다.
+    """
+    if not files:
+        return text
+    note = "\n".join([FILES_NOTE] + [f"- {path}" for path in files])
+    return f"{text}\n\n{note}" if text else note
 
 
 def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None, history=None):
@@ -227,7 +242,7 @@ def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None, history=None):
         lines += [f"- {s['name']}: {s['description']} (`{s['path']}`)" for s in found]
         lines.append("")
     lines += ["## 도구를 쓸 때", ""] + [f"- {rule}" for rule in TOOL_RULES] + [""]
-    lines += ["## 결과 파일", "", "만든 결과 파일은 `outbox/`에 저장한다.", ""]
+    lines += ["## 파일", "", "- 사용자가 올린 파일은 `inbox/`에 있다.", "- 만든 결과 파일은 `outbox/`에 저장한다.", ""]
     past = history_text(history)
     if past:
         lines += ["## 지금까지의 대화", "",

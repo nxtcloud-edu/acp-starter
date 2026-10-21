@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import unittest
 from unittest import mock
 import urllib.error
@@ -530,6 +531,76 @@ class DashboardTest(unittest.TestCase):
         status, body = self.call("GET", "/api/events?after=500")   # 서버를 다시 켜기 전의 번호
         self.assertEqual((status, body["events"]), (200, []))
         self.assertEqual(body["epoch"], self.platform.log.epoch)
+
+
+    # ---- 파일 올리기 ----
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+
+    def upload(self, name, data):
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/uploads?name={urllib.request.quote(name)}",
+                                         data=data, method="POST", headers={"Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            with error:
+                return error.code, json.loads(error.read())
+
+    def test_upload_saves_into_inbox_and_serves_it_sandboxed(self):
+        status, info = self.upload("메모 사진.png", self.PNG)
+        self.assertEqual((status, info["path"], info["type"], info["size"]),
+                         (201, "inbox/메모_사진.png", "image/png", len(self.PNG)))
+        self.assertEqual((self.root / "workspace" / "inbox" / "메모_사진.png").read_bytes(), self.PNG)
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/inbox/" + urllib.request.quote("메모_사진.png")) as response:
+            self.assertEqual(response.headers["Content-Security-Policy"], "sandbox")
+            self.assertEqual(response.headers["Content-Type"], "image/png")
+            self.assertEqual(response.read(), self.PNG)
+
+    def test_upload_name_is_cleaned_and_never_overwrites(self):
+        first = self.upload("../../engines/base.py", b"a")[1]
+        second = self.upload("base.py", b"b")[1]
+        hidden = self.upload(".env", b"c")[1]
+        nfd = self.upload(unicodedata.normalize("NFD", "보고서.csv"), b"d")[1]   # macOS가 보내는 한글 이름의 꼴
+        self.assertEqual([first["path"], second["path"], hidden["path"], nfd["path"]],
+                         ["inbox/base.py", "inbox/base-2.py", "inbox/env", "inbox/보고서.csv"])
+        self.assertEqual((self.root / "workspace" / "inbox" / "base.py").read_bytes(), b"a")
+        self.assertEqual(self.call("GET", "/inbox/..%2F..%2Fcustom%2Frules.py")[0], 404)
+
+    def test_too_large_upload_is_refused(self):
+        with mock.patch.object(dashboard, "UPLOAD_BYTES", 10):
+            status, body = self.upload("큰.png", b"0" * 11)
+        self.assertEqual(status, 413)
+        self.assertIn("너무 큽니다", body["error"])
+        self.assertFalse((self.root / "workspace" / "inbox" / "큰.png").exists())
+
+    def test_prompt_with_files_goes_in_the_engines_way_and_is_recorded(self):
+        photo = self.upload("메모.png", self.PNG)[1]["path"]
+        table = self.upload("표.csv", "a,b\n".encode())[1]["path"]
+        conversation = self.new_conversation()
+        start = len(self.platform.log.events)
+        status, _ = self.call("POST", f"/api/conversations/{conversation}/prompt",
+                              {"text": "정리해 줘", "files": [photo, table]})
+        self.assertEqual(status, 202)
+        self.wait_for(lambda e: e["type"] == "done" and e["seq"] > start)
+        answer = "".join(e["text"] for e in self.platform.log.events[start:] if e["type"] == "text")
+        self.assertIn("[올린 파일]", answer)                              # 질문 아래에 경로가 붙는다
+        self.assertIn("- inbox/메모.png\n- inbox/표.csv", answer)
+        self.assertTrue(answer.endswith("/ 블록 image:image/png, resource_link:표.csv"))   # 사진은 그림, 표는 경로
+        self.assertEqual(self.wait_for(lambda e: e["type"] == "user")["files"], [photo, table])
+        stored = self.call("GET", f"/api/conversations/{conversation}")[1]["messages"][0]
+        self.assertEqual((stored["text"], stored["files"]), ("정리해 줘", [photo, table]))
+
+    def test_prompt_with_only_a_file_and_with_unknown_files(self):
+        photo = self.upload("내준비메모.png", self.PNG)[1]["path"]
+        conversation = self.new_conversation()
+        prompt = f"/api/conversations/{conversation}/prompt"
+        self.assertEqual(self.call("POST", prompt, {"text": "a", "files": ["inbox/없는.png"]})[0], 400)
+        self.assertEqual(self.call("POST", prompt, {"text": "a", "files": ["../custom/rules.py"]})[0], 400)
+        self.assertEqual(self.call("POST", prompt, {"text": "a", "files": "inbox/내준비메모.png"})[0], 400)
+        self.assertEqual(self.call("POST", prompt, {"files": [photo]})[0], 202)
+        self.wait_for(lambda e: e["type"] == "done")
+        self.assertEqual(self.call("GET", "/api/conversations")[1]["conversations"][0]["title"], "내준비메모.png")
 
 
     # ---- 엔진마다 다른 거절을 하나의 결과로 ----

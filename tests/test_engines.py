@@ -77,6 +77,41 @@ class EngineSessionTest(unittest.TestCase):
         with self.assertRaises(EngineError):
             client.start()
 
+    def files(self):
+        folder = pathlib.Path(tempfile.mkdtemp())
+        photo = folder / "메모.png"
+        photo.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
+        table = folder / "표.csv"
+        table.write_text("a,b\n1,2\n", encoding="utf-8")
+        return photo, table
+
+    def test_photo_goes_as_image_block_and_other_files_as_links(self):
+        photo, table = self.files()
+        client = self.make()
+        client.start()
+        self.assertEqual(client.prompt_capabilities, {"image": True})
+        result = client.send("파일", [photo, table])
+        self.assertEqual(result.text, "받음: 파일 / 블록 image:image/png, resource_link:표.csv")
+
+    def test_engine_without_image_support_gets_a_link(self):
+        photo, _ = self.files()
+        with mock.patch.dict(os.environ, {"FAKE_STYLE": "no_image"}):
+            client = self.make()
+            client.start()
+            result = client.send("파일", [photo])
+        self.assertEqual(result.text, "받음: 파일 / 블록 resource_link:메모.png")
+
+    def test_large_photo_goes_as_link_with_notice(self):
+        photo, _ = self.files()
+        notices = []
+        client = self.make(on_notice=notices.append)
+        client.max_image_bytes = 5
+        client.start()
+        result = client.send("파일", [photo])
+        self.assertEqual(result.text, "받음: 파일 / 블록 resource_link:메모.png")
+        self.assertIn("그림으로 보내지 않고 파일 경로로 보냈다", result.notices[0])
+        self.assertEqual(notices, result.notices)
+
     def test_safe_mode_is_set_after_session_opens(self):
         chunks = []
         client = self.make(engine=ClaudeEngine, mode="auto", on_text=chunks.append)
