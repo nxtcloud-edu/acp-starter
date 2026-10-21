@@ -22,6 +22,13 @@ WORKSPACE = ROOT / "workspace"
 # 플랫폼 안내와 사람의 질문 사이에 넣는 줄. 에이전트는 이 줄 아래를 질문으로 읽는다.
 PREAMBLE_END = "[여기까지 플랫폼 안내. 아래가 사용자의 요청이다]"
 
+# 도구를 쓰는 방법. 엔진마다 버릇이 달라서(셸로 파일 쓰기, 시도 없이 거절됐다고 답하기) 모든 엔진에 같은 규칙을 보낸다.
+TOOL_RULES = [
+    "파일을 만들거나 고칠 때는 셸 명령(printf, echo, cat >) 대신 파일 쓰기 도구를 쓴다.",
+    "쓰기, 명령, 인터넷이 필요하면 먼저 그 도구를 쓴다. 허락은 플랫폼이 사람이나 규칙에 묻는다. 시도하지 않고 거절되었다고 말하지 않는다.",
+    "거절된 도구는 다시 요청하지 않는다. 그 도구 없이 할 수 있는 만큼 한 뒤, 하지 못한 것을 알린다.",
+]
+
 DEFAULT_BRAND = {"name": "내 에이전트 플랫폼", "tagline": "", "accent": "#087F87"}
 DEFAULT_AGENT = "기본_도우미"
 DECISIONS = ("allow", "deny", "ask")
@@ -210,6 +217,7 @@ def preamble(workspace=WORKSPACE, custom=CUSTOM, agent=None, history=None):
                   "요청이 아래 스킬에 맞으면, 먼저 그 SKILL.md를 읽고 적힌 절차를 따른다. 경로는 작업 폴더 기준이다.", ""]
         lines += [f"- {s['name']}: {s['description']} (`{s['path']}`)" for s in found]
         lines.append("")
+    lines += ["## 도구를 쓸 때", ""] + [f"- {rule}" for rule in TOOL_RULES] + [""]
     lines += ["## 결과 파일", "", "만든 결과 파일은 `outbox/`에 저장한다.", ""]
     past = history_text(history)
     if past:

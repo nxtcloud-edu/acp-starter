@@ -52,6 +52,12 @@ class CustomLoaderTest(unittest.TestCase):
         self.assertIn("아직 정하지 않았다", text)
         self.assertNotIn("쓸 수 있는 스킬", text)
 
+    def test_preamble_has_the_same_tool_rules_for_every_engine(self):
+        text = custom_loader.preamble(self.workspace, self.custom)
+        self.assertIn("## 도구를 쓸 때", text)
+        for rule in custom_loader.TOOL_RULES:
+            self.assertIn(f"- {rule}", text)
+
     def test_decide_defaults_to_ask(self):
         self.assertEqual(custom_loader.decide("kiro", {}, self.custom), ("ask", None))
         self.assertEqual(custom_loader.decide("kiro", {}, ROOT / "custom"), ("ask", None))
