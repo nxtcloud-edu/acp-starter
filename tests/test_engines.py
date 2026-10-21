@@ -34,7 +34,8 @@ class EngineSessionTest(unittest.TestCase):
         chunks = []
         client = self.make(on_text=chunks.append)
         client.start()
-        self.assertEqual(client.prompt("안녕"), "end_turn")
+        result = client.send("안녕")
+        self.assertEqual((result.stop, result.stop_label, result.text), ("done", "끝", "받음: 안녕"))
         self.assertEqual("".join(chunks), "받음: 안녕")
 
     def test_permission_allowed_by_callback(self):
@@ -42,7 +43,7 @@ class EngineSessionTest(unittest.TestCase):
         client = self.make(on_text=chunks.append,
                            on_permission=lambda request: asked.append(request.title) or True)
         client.start()
-        client.prompt("도구 써 줘")
+        client.send("도구 써 줘")
         self.assertEqual(asked, ["Running: date"])
         self.assertTrue("".join(chunks).endswith("/ allow-once"))
 
@@ -50,25 +51,25 @@ class EngineSessionTest(unittest.TestCase):
         chunks = []
         client = self.make(on_text=chunks.append)
         client.start()
-        client.prompt("도구 써 줘")
+        client.send("도구 써 줘")
         self.assertTrue("".join(chunks).endswith("/ reject"))
 
     def test_tool_updates_reach_callback(self):
         tools = []
         client = self.make(on_tool=lambda request: tools.append((request.kind, request.title)))
         client.start()
-        client.prompt("도구 써 줘")
+        client.send("도구 써 줘")
         self.assertEqual(tools, [("execute", "Running: date")])
 
     def test_kiro_counts_credits_and_others_ignore_them(self):
         client = self.make()
         client.start()
-        client.prompt("안녕")
+        client.send("안녕")
         self.assertAlmostEqual(client.credits, 0.75)
         self.assertEqual(client.context_tokens, 1234)
         other = self.make(engine=ClaudeEngine, mode="auto")
         other.start()
-        other.prompt("안녕")
+        other.send("안녕")
         self.assertEqual(other.credits, 0)   # 크레딧 알림은 Kiro만의 확장이다
 
     def test_wrong_mode_raises(self):
@@ -80,20 +81,61 @@ class EngineSessionTest(unittest.TestCase):
         chunks = []
         client = self.make(engine=ClaudeEngine, mode="auto", on_text=chunks.append)
         client.start()
-        client.prompt("모드")
+        client.send("모드")
         self.assertEqual("".join(chunks), "받음: default")
 
     def test_claude_sends_session_meta_and_kiro_does_not(self):
         chunks = []
         client = self.make(engine=ClaudeEngine, mode="auto", on_text=chunks.append)
         client.start()
-        client.prompt("메타")
+        client.send("메타")
         self.assertEqual("".join(chunks), '받음: {"claudeCode": {"options": {"settingSources": []}}}')
         chunks.clear()
         client = self.make(on_text=chunks.append)
         client.start()
-        client.prompt("메타")
+        client.send("메타")
         self.assertEqual("".join(chunks), "받음: null")
+
+
+class TurnResultTest(unittest.TestCase):
+    """엔진마다 다르게 끝나도, 플랫폼은 같은 꼴의 TurnResult를 받는다."""
+
+    def make(self, engine, style="", **callbacks):
+        env = dict(os.environ, FAKE_STYLE=style)
+        client = engine(WORKSPACE, command=FAKE + ["engine" if engine.expect_mode else "auto"], env=env, **callbacks)
+        self.addCleanup(client.close)
+        client.start()
+        return client
+
+    def test_tools_refusals_and_segments_are_packed(self):
+        result = self.make(KiroEngine).send("도구 써 줘")
+        self.assertEqual(result.stop, "done")
+        self.assertEqual(result.segments, ["받음: 도구 써 줘", "/ reject"])
+        self.assertEqual(result.text, "받음: 도구 써 줘\n\n/ reject")
+        self.assertEqual([(r.kind, r.command) for r in result.tools], [("execute", "")])
+        self.assertEqual([(r.kind, r.command) for r in result.refused], [("execute", "date")])
+        self.assertEqual(result.notices, [])
+        self.assertEqual(result.usage, {"credits": 0.75, "contextTokens": 1234})
+        self.assertEqual(result.usage_text, "크레딧 0.750, 컨텍스트 1,234토큰")
+
+    def test_engine_that_stops_on_refusal_is_asked_to_continue(self):
+        notices = []
+        result = self.make(CodexEngine, "codex", on_notice=notices.append).send("도구 써 줘")
+        self.assertEqual(result.stop, "done")           # 멈춘 차례를 플랫폼이 이어 가게 했다
+        self.assertEqual(len(result.notices), 1)
+        self.assertEqual(notices, result.notices)
+        self.assertEqual([r.command for r in result.refused], ["date"])
+        self.assertIn("[플랫폼 알림] 방금 요청한 도구는 허락되지 않았다: 명령 실행 date", result.text)
+        self.assertIsNone(result.usage["credits"])      # 크레딧은 Kiro만 알린다
+
+    def test_codex_prefers_decline_over_cancel(self):
+        result = self.make(CodexEngine, "codex_decline").send("도구 써 줘")
+        self.assertEqual((result.stop, result.notices), ("done", []))
+        self.assertTrue(result.text.endswith("/ decline"))
+
+    def test_other_engines_keep_first_reject_option(self):
+        result = self.make(ClaudeEngine, "codex").send("도구 써 줘")   # decline이 없는 선택지
+        self.assertEqual(result.notices, ["엔진이 거절 뒤 차례를 멈춰서, 플랫폼이 거절을 알리고 이어서 하게 했다."])
 
 
 class EngineHomeTest(unittest.TestCase):

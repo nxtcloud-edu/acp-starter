@@ -2,7 +2,8 @@
 
 플랫폼과 엔진 사이의 통역이다.
 - 플랫폼 → 엔진: 플랫폼의 질문과 허락 여부를 그 엔진이 받는 ACP 메시지로 바꿔 보낸다.
-- 엔진 → 플랫폼: 엔진마다 다른 메시지(답 조각, 도구 요청, 쓴 양)를 하나의 형식으로 바꿔 넘긴다.
+- 엔진 → 플랫폼: 엔진마다 다른 메시지(답 조각, 도구 요청, 쓴 양, 끝난 까닭)를 하나의 형식으로 포장해 넘긴다.
+  하나의 형식은 ToolRequest(도구 하나)와 TurnResult(한 차례의 결과)다.
 
 엔진마다 다른 점은 engines/<이름>.py가 이 클래스의 값과 훅을 덮어써서 맞춘다.
 메시지는 JSON 한 줄씩 표준 입출력으로 주고받는다(JSON-RPC 2.0).
@@ -27,6 +28,12 @@ KIND_LABELS = {
     "execute": "명령 실행", "edit": "파일 쓰기", "delete": "파일 지우기", "move": "파일 옮기기",
     "read": "읽기", "search": "찾기", "fetch": "인터넷", "think": "생각", "other": "도구",
 }
+
+
+# 끝난 까닭. ACP의 stopReason을 플랫폼의 값으로 바꾼다.
+ACP_STOPS = {"end_turn": "done", "max_tokens": "limit", "max_turn_requests": "limit",
+             "refusal": "refusal", "cancelled": "cancelled"}
+STOP_LABELS = {"done": "끝", "limit": "한도에 닿아 멈춤", "refusal": "엔진이 답하지 않기로 함", "cancelled": "멈춤"}
 
 
 class ToolRequest:
@@ -59,6 +66,41 @@ class ToolRequest:
         return f"ToolRequest({self.engine}, {self.kind}, {self.detail!r})"
 
 
+class TurnResult:
+    """한 차례의 결과. 어느 엔진이 답했든 같은 꼴이다.
+
+    stop:     끝난 까닭. "done", "limit", "refusal", "cancelled" 가운데 하나
+    text:     답. 도구를 쓰기 전과 뒤의 말을 빈 줄로 이어 붙인다
+    segments: 도구 사이사이의 말
+    tools:    쓰기 시작한 도구(ToolRequest)
+    refused:  거절한 도구(ToolRequest)
+    notices:  플랫폼이 남긴 알림. 예: 거절 뒤 멈춘 엔진에게 이어서 하게 했다
+    usage:    쓴 양 {"credits": 크레딧 또는 None, "contextTokens": 토큰 또는 None}
+    """
+
+    def __init__(self, engine, stop, segments, tools, refused, notices, usage):
+        self.engine, self.stop = engine, stop
+        self.segments = [s.strip() for s in segments if s.strip()]
+        self.tools, self.refused, self.notices, self.usage = tools, refused, notices, usage
+
+    @property
+    def text(self):
+        return "\n\n".join(self.segments)
+
+    @property
+    def stop_label(self):
+        return STOP_LABELS.get(self.stop, self.stop)
+
+    @property
+    def usage_text(self):
+        parts = []
+        if self.usage.get("credits"):
+            parts.append(f"크레딧 {self.usage['credits']:.3f}")
+        if self.usage.get("contextTokens") is not None:
+            parts.append(f"컨텍스트 {self.usage['contextTokens']:,}토큰")
+        return ", ".join(parts) or "알 수 없음"
+
+
 class AcpEngine:
     """ACP 엔진 하나와의 세션. 엔진마다 이 클래스를 이어받아 아래 값과 훅을 정한다."""
 
@@ -74,18 +116,20 @@ class AcpEngine:
     status = []                # 로그인 상태를 보는 명령
     login_mode = "terminal"    # device(기기 코드), code(코드 붙여 넣기), terminal(터미널에서)
 
-    def __init__(self, workspace, on_text=None, on_tool=None, on_permission=None,
+    def __init__(self, workspace, on_text=None, on_tool=None, on_permission=None, on_notice=None,
                  preamble=None, command=None, env=None):
         # workspace: 엔진이 일하는 폴더.
         # on_text(text): 답의 조각이 올 때마다 부른다.
         # on_tool(request): 엔진이 도구를 쓰기 시작할 때 ToolRequest로 부른다.
         # on_permission(request) -> bool: 허락이 필요할 때 ToolRequest로 부른다. 없으면 모두 거절한다.
+        # on_notice(text): 플랫폼이 엔진의 다른 점을 맞추며 한 일을 알린다.
         # preamble: 첫 질문 앞에 붙여 보낼 플랫폼 안내. ACP에는 시스템 프롬프트 칸이 없다.
         # command, env: 테스트에서 실행 명령과 환경을 바꿀 때만 쓴다.
         self.workspace = os.path.abspath(workspace)
         self.on_text = on_text or (lambda text: None)
         self.on_tool = on_tool or (lambda request: None)
         self.on_permission = on_permission or (lambda request: False)
+        self.on_notice = on_notice or (lambda text: None)
         self.preamble = preamble
         self.command_override = command
         self.env_override = env
@@ -95,6 +139,7 @@ class AcpEngine:
         self.context_tokens = None
         self._next_id = 0
         self._kinds = {}             # 도구 번호 → 시작 알림에서 본 kind
+        self._turn = None            # 지금 차례의 기록: segments, tools, refused, notices
 
     # ---- 샌드박스(엔진마다 덮어쓰는 훅 포함) ----
 
@@ -150,6 +195,12 @@ class AcpEngine:
         """허락 요청의 선택지에서 고른다. 선택지 이름은 엔진마다 달라서 종류(kind)로 고른다."""
         wanted = "allow_once" if allow else "reject_once"
         return next((o["optionId"] for o in options if o.get("kind") == wanted), None)
+
+    def refusal_followup(self, refused):
+        """거절 뒤 차례를 멈춘 엔진에게 보낼 글. 다른 엔진처럼 이어서 하게 한다."""
+        items = "; ".join(f"{r.label} {r.detail.splitlines()[0][:80] if r.detail else ''}".strip() for r in refused)
+        return (f"[플랫폼 알림] 방금 요청한 도구는 허락되지 않았다: {items}. "
+                "그 도구는 다시 요청하지 말고, 그 도구 없이 할 수 있는 만큼 이어서 한 뒤 하지 못한 것을 답에 적는다.")
 
     # ---- 엔진 → 플랫폼: 받을 때 바꾸는 훅 ----
 
@@ -237,25 +288,30 @@ class AcpEngine:
         if self.safe_mode:
             self._request("session/set_mode", {"sessionId": self.session_id, "modeId": self.safe_mode})
 
-    def prompt(self, text):
-        """질문 하나를 보내고, 엔진이 이번 차례를 끝낼 때까지 기다린다."""
+    def send(self, text):
+        """질문 하나를 보내고, 이번 차례가 끝나면 결과를 TurnResult(하나의 형식)로 돌려준다."""
         if self.preamble:
             # 플랫폼 안내는 이 대화의 첫 질문에만 붙인다.
             text, self.preamble = f"{self.preamble}\n\n{text}", None
+        self._turn = {"segments": [""], "tools": [], "refused": [], "notices": []}
+        stop = self._prompt(text)
+        if stop == "cancelled" and self._turn["refused"]:
+            # 거절하면 차례 전체를 멈추는 엔진이 있다(Codex). 다른 엔진처럼 이어서 하게 한 번 더 보낸다.
+            notice = "엔진이 거절 뒤 차례를 멈춰서, 플랫폼이 거절을 알리고 이어서 하게 했다."
+            self._turn["notices"].append(notice)
+            self.on_notice(notice)
+            self._turn["segments"].append("")
+            stop = self._prompt(self.refusal_followup(self._turn["refused"]))
+        turn, self._turn = self._turn, None
+        usage = {"credits": self.credits or None, "contextTokens": self.context_tokens}
+        return TurnResult(self.name, stop, turn["segments"], turn["tools"], turn["refused"], turn["notices"], usage)
+
+    def _prompt(self, text):
         result = self._request("session/prompt", {
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": text}],
         })
-        return result["stopReason"]
-
-    def usage_text(self):
-        """쓴 양을 사람이 읽을 글로 돌려준다."""
-        parts = []
-        if self.credits:
-            parts.append(f"크레딧 {self.credits:.3f}")
-        if self.context_tokens is not None:
-            parts.append(f"컨텍스트 {self.context_tokens:,}토큰")
-        return ", ".join(parts) or "알 수 없음"
+        return ACP_STOPS.get(result.get("stopReason"), result.get("stopReason"))
 
     def close(self):
         if self.process is None:
@@ -319,7 +375,10 @@ class AcpEngine:
         if method == "session/request_permission":
             tool_call = params.get("toolCall") or {}
             request = self.tool_request(tool_call, self._kinds.get(tool_call.get("toolCallId")))
-            option = self.choose_option(params.get("options", []), bool(self.on_permission(request)))
+            allowed = bool(self.on_permission(request))
+            if not allowed and self._turn is not None:
+                self._turn["refused"].append(request)
+            option = self.choose_option(params.get("options", []), allowed)
             if option is None:
                 outcome = {"outcome": "cancelled"}
             else:
@@ -345,11 +404,17 @@ class AcpEngine:
             if kind == "agent_message_chunk":
                 content = update.get("content", {})
                 if content.get("type") == "text":
+                    if self._turn is not None:
+                        self._turn["segments"][-1] += content["text"]
                     self.on_text(content["text"])
             elif kind in ("tool_call", "tool_call_update"):
                 if update.get("kind"):
                     self._kinds[update.get("toolCallId")] = update["kind"]
                 if kind == "tool_call":
-                    self.on_tool(self.tool_request(update))
+                    request = self.tool_request(update)
+                    if self._turn is not None:
+                        self._turn["tools"].append(request)
+                        self._turn["segments"].append("")   # 도구 앞뒤의 말은 따로 묶는다
+                    self.on_tool(request)
             elif kind == "usage_update" and isinstance(update.get("used"), int):
                 self.context_tokens = update["used"]

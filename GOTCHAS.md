@@ -20,3 +20,10 @@
 - 근본 원인: codex-acp는 명령을 따옴표로 감싸 보낸다. 여러 줄 명령은 줄바꿈 문자를 이스케이프하지 않고 그대로 둔다. `json.loads`의 기본(strict) 모드는 문자열 안의 줄바꿈 문자를 받지 않아 실패했고, 실패하면 원래 글을 그대로 쓰게 되어 있었다. 테스트에는 한 줄 명령만 있어서 잡지 못했다.
 - 해결: `engines/codex.py`의 `command_text`가 `json.loads(text, strict=False)`로 푼다. 실제 여러 줄 모양을 `tests/test_tool_request.py`에 더했다.
 - 교훈: 엔진이 보내는 모양의 테스트 자료는 실제로 받은 것에서 가져오고, 한 줄짜리와 여러 줄짜리를 함께 넣는다.
+
+## Codex에서 거절하면 차례 전체가 멈췄다 (2026-10-21)
+
+- 증상: 같은 요청에서 Kiro와 Claude는 거절된 단계를 건너뛰고 끝까지 보고했는데, Codex는 첫 거절 뒤 아무 말 없이 끝났다. 끝난 까닭(`stopReason`)이 `cancelled`였다. 사람 없는 일 실행의 결과도 엔진에 따라 달라졌다.
+- 근본 원인: codex-acp 2.2.2의 거절 선택지는 `decline`("No, continue without running it")과 `cancel`("No, and tell Codex what to do differently") 둘이다. 그런데 명령 실행 요청과 파일 고치기 요청에는 `cancel`만 준다. 플랫폼은 종류(`reject_once`)로 골랐으므로 `cancel`을 골랐고, `cancel`은 차례를 멈춘다.
+- 해결: `engines/codex.py`가 `decline`이 있으면 먼저 고른다. 없어서 차례가 멈추면 `engines/base.py`의 `send`가 거절된 도구를 알리고 "그 도구 없이 이어서 하라"고 한 번 더 보낸다. 플랫폼은 그 사실을 알림(`notice`)으로 남긴다.
+- 교훈: 같은 이름의 선택(거절)이 엔진마다 다른 결과를 낼 수 있다. 엔진의 차이는 엔진 층에서 맞추고, 플랫폼이 받는 결과(TurnResult)는 같은 꼴로 만든다.

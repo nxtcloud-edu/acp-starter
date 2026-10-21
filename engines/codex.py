@@ -4,6 +4,8 @@
 - 안전 모드 read-only: 쓰기와 인터넷은 허락을 받아야 한다. 읽기 명령은 묻지 않고 읽기만 되는 샌드박스에서 실행한다.
 - 로그인: 샌드박스에 따로. 주소와 기기 코드.
 - 명령을 따옴표로 한 번 더 감싸 보낸다. 여러 줄 명령은 줄바꿈을 그대로 둔다.
+- 거절 선택지가 decline(건너뛰고 계속)과 cancel(차례를 멈춤) 둘이다. decline을 먼저 고른다.
+  명령과 파일 고치기 요청에는 cancel만 줄 때가 많다. 그때 멈춘 차례는 base.send가 이어 가게 한다.
 """
 
 import json
@@ -33,6 +35,14 @@ class CodexEngine(AcpEngine):
     @classmethod
     def logged_in(cls, returncode, output):
         return returncode == 0 and "Not logged in" not in output
+
+    def choose_option(self, options, allow):
+        if not allow:
+            # 거절 선택지가 둘이다. decline은 그 도구만 건너뛰고 계속하고, cancel은 차례를 멈춘다.
+            decline = next((o["optionId"] for o in options if o.get("optionId") == "decline"), None)
+            if decline:
+                return decline
+        return super().choose_option(options, allow)
 
     def command_text(self, value):
         text = super().command_text(value)

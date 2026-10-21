@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -410,6 +411,34 @@ class DashboardTest(unittest.TestCase):
         self.ask("기본에게")
         self.connect(agent="메모_정리")
         self.assertEqual(self.last_preamble()["history"], 0)
+
+
+    # ---- 엔진마다 다른 거절을 하나의 결과로 ----
+
+    def test_refusal_on_codex_style_engine_still_ends_as_done(self):
+        write_agent(self.root, "코덱스", engine="codex")
+        with mock.patch.dict(os.environ, {"FAKE_STYLE": "codex"}):
+            self.connect(agent="코덱스")
+            self.call("POST", "/api/prompt", {"text": "도구 써 줘"})
+            card = self.wait_for(lambda e: e["type"] == "permission")
+            self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
+            done = self.wait_for(lambda e: e["type"] == "done")
+        notice = self.wait_for(lambda e: e["type"] == "notice")
+        self.assertIn("이어서 하게 했다", notice["text"])
+        self.assertEqual((done["stop"], done["stopLabel"], done["refused"]), ("done", "끝", 1))
+
+    def test_unattended_result_file_has_the_same_shape_for_every_engine(self):
+        write_agent(self.root, "코덱스", engine="codex")
+        with mock.patch.dict(os.environ, {"FAKE_STYLE": "codex"}):
+            codex = runner.run_task("코덱스", "도구 써 줘", workspace=self.root / "workspace",
+                                    client_factory=fake_factory, custom=self.root / "custom")
+        kiro = runner.run_task("기본_도우미", "도구 써 줘", workspace=self.root / "workspace",
+                               client_factory=fake_factory, custom=self.root / "custom")
+        for result in (codex, kiro):
+            text = result.path.read_text(encoding="utf-8")
+            self.assertIn("- 끝난 까닭: 끝", text)
+            self.assertIn("- 거절한 도구: 명령 실행 date", text)
+        self.assertIn("- 플랫폼 알림: 엔진이 거절 뒤 차례를 멈춰서", codex.path.read_text(encoding="utf-8"))
 
 
 class TaskFileTest(unittest.TestCase):

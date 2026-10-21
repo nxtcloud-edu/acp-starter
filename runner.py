@@ -30,38 +30,33 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=engin
     """에이전트에게 일을 한 번 맡기고 Result(결과 파일 경로, 보내기 오류)를 돌려준다.
 
     engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다.
+    결과 파일은 엔진과 상관없이 같은 꼴이다(engines.TurnResult).
     """
-    answer, tools, refused, notes = [], [], [], []
-
-    def on_tool(request):
-        tools.append(f"{request.label} {request.detail}".strip())
+    notes, partial = [], []
 
     def on_permission(request):
         decision, error = custom_loader.decide(agent, request, custom)
         if error:
             notes.append(error)
-        if decision == "allow":
-            return True
-        refused.append(f"{request.label} {request.detail}".strip())
-        return False
+        return decision == "allow"
 
-    client = None
+    client, result = None, None
     try:
         definition = custom_loader.agent(agent, custom)
         engine = engine or definition["engine"]
-        client = client_factory(engine, workspace, on_text=answer.append, on_tool=on_tool,
-                                on_permission=on_permission,
+        client = client_factory(engine, workspace, on_text=partial.append, on_permission=on_permission,
                                 preamble=custom_loader.preamble(workspace, custom, definition))
     except (custom_loader.AgentError, EngineError) as error:
-        stop_reason = f"오류: {error}"
+        stop = f"오류: {error}"
     if client is not None:
         timer = threading.Timer(TIME_LIMIT_SECONDS, client.close)
         timer.start()
         try:
             client.start()
-            stop_reason = client.prompt(prompt)
+            result = client.send(prompt)
+            stop = result.stop_label
         except EngineError as error:
-            stop_reason = f"오류: {error}"
+            stop = f"오류: {error}"
         finally:
             timer.cancel()
             client.close()
@@ -71,18 +66,21 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=engin
     outbox.mkdir(exist_ok=True)
     label = f"_{name}" if name else ""
     path = outbox / f"{now:%Y-%m-%d_%H%M%S}_{agent}{label}.md"
-    text = "".join(answer).strip()
+    text = result.text if result else "".join(partial).strip()
+    describe = lambda requests: ", ".join(f"{r.label} {r.detail.splitlines()[0] if r.detail else ''}".strip()
+                                          for r in requests) or "없음"
     lines = [
         f"# 실행 결과 {now:%Y-%m-%d %H:%M}",
         "",
         f"- 일: {name or '바로 맡긴 질문'}",
-        f"- 끝난 까닭: {stop_reason}",
+        f"- 끝난 까닭: {stop}",
         f"- 에이전트: {agent}",
         f"- 엔진: {engine or '알 수 없음'}",
-        f"- 쓴 양: {client.usage_text() if client else '알 수 없음'}",
-        f"- 쓴 도구: {', '.join(tools) or '없음'}",
-        f"- 거절한 도구: {', '.join(refused) or '없음'}",
+        f"- 쓴 양: {result.usage_text if result else '알 수 없음'}",
+        f"- 쓴 도구: {describe(result.tools) if result else '없음'}",
+        f"- 거절한 도구: {describe(result.refused) if result else '없음'}",
     ]
+    lines += [f"- 플랫폼 알림: {notice}" for notice in (result.notices if result else [])]
     lines += [f"- 규칙 오류: {note}" for note in notes]
     lines += ["", "## 답", "", text, ""]
     path.write_text("\n".join(lines), encoding="utf-8")

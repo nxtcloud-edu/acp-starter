@@ -367,8 +367,11 @@ function handle(event) {
     case "rule_error":
       add("note error", event.message);
       break;
+    case "notice":
+      add("note", `플랫폼 · ${event.text}`);
+      break;
     case "done":
-      add("note", `끝 · ${event.usage}`);
+      add("note", `${event.stopLabel} · ${event.usage}`);
       answer = null;
       loadOutbox().catch(() => {});
       break;

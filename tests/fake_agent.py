@@ -1,6 +1,9 @@
-"""테스트용 가짜 에이전트. ACP 에이전트처럼 표준 입출력으로 메시지를 주고받는다.
+"""테스트용 가짜 엔진. ACP 엔진처럼 표준 입출력으로 메시지를 주고받는다.
 
 실행 인자: fake_agent.py <현재 모드 이름>
+환경변수 FAKE_STYLE: 비우면 거절해도 계속한다(Kiro, Claude처럼).
+  codex          거절 선택지가 cancel뿐이고, 거절하면 차례를 멈춘다(Codex처럼).
+  codex_decline  거절 선택지가 cancel과 decline 둘이다. decline이면 계속한다.
 """
 
 import json
@@ -8,6 +11,13 @@ import os
 import sys
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "engine"
+STYLE = os.environ.get("FAKE_STYLE", "")
+OPTIONS = {
+    "": [{"optionId": "allow-once", "kind": "allow_once"}, {"optionId": "reject", "kind": "reject_once"}],
+    "codex": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"}],
+    "codex_decline": [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "cancel", "kind": "reject_once"},
+                      {"optionId": "decline", "kind": "reject_once"}],
+}
 PREAMBLE_END = "[여기까지 플랫폼 안내. 아래가 사용자의 요청이다]"   # custom_loader.PREAMBLE_END와 같다
 
 
@@ -51,16 +61,19 @@ for line in sys.stdin:
             text = os.environ.get("FAKE_HOME_CHECK", "")
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "받음: "}})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
-        if "도구" in text:
+        if "도구" in text and not text.startswith("[플랫폼 알림]"):
             # 실제 엔진처럼 시작 알림에는 kind가 있고, 허락 요청에는 없다(Kiro와 같은 모양).
             update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Running: date", "kind": "execute"})
             send({"id": "p1", "method": "session/request_permission", "params": {
                 "sessionId": "s1",
                 "toolCall": {"toolCallId": "t1", "title": "Running: date", "rawInput": {"command": "date"}},
-                "options": [{"optionId": "allow-once", "kind": "allow_once"},
-                            {"optionId": "reject", "kind": "reject_once"}]}})
+                "options": OPTIONS[STYLE]}})
             answer = read()
             chosen = answer["result"]["outcome"].get("optionId", "cancelled")
+            if chosen == "cancel":
+                # Codex처럼 차례 전체를 멈춘다. 거절에 대한 말은 하지 않는다.
+                send({"id": rid, "result": {"stopReason": "cancelled"}})
+                continue
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f" / {chosen}"}})
         send({"id": 99, "method": "fs/read_text_file", "params": {}})
         unknown = read()

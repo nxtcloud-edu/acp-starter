@@ -287,7 +287,7 @@ class Platform:
         client = None
         try:
             client = self.client_factory(engine, self.workspace, on_text=self._on_text, on_tool=self._on_tool,
-                                         on_permission=self._ask, preamble=preamble)
+                                         on_permission=self._ask, on_notice=self._on_notice, preamble=preamble)
             client.start()
         except EngineError as error:
             if client is not None:
@@ -317,16 +317,18 @@ class Platform:
         threading.Thread(target=self._prompt, args=(client, text), daemon=True).start()
 
     def _prompt(self, client, text):
-        agent = self.agent
+        """엔진이 어떤 꼴로 답하든, 플랫폼은 하나의 형식(TurnResult)으로 받아 화면과 기록에 쓴다."""
+        agent, result = self.agent, None
         try:
-            stop_reason = client.prompt(text)
-            self.log.add(type="done", stopReason=stop_reason, usage=client.usage_text())
+            result = client.send(text)
+            self.log.add(type="done", stop=result.stop, stopLabel=result.stop_label, usage=result.usage_text,
+                         refused=len(result.refused))
             state = "ready"
         except EngineError as error:
             self.log.add(type="status", state="error", agent=self.agent, engine=self.engine, message=str(error))
             state = "error"
         with self.lock:
-            answer = "".join(self.turn).strip()
+            answer = result.text if result else "".join(self.turn).strip()
             if answer:
                 self.history.setdefault(agent, []).append({"role": "agent", "text": answer})
             self.turn = []
@@ -336,6 +338,9 @@ class Platform:
     def _on_text(self, text):
         self.turn.append(text)
         self.log.add(type="text", text=text)
+
+    def _on_notice(self, text):
+        self.log.add(type="notice", text=text)
 
     def _on_tool(self, request):
         self.log.add(type="tool", kind=request.kind, label=request.label, detail=request.detail)

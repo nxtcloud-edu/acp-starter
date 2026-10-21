@@ -43,7 +43,8 @@ def main():
 
     try:
         client = engines.make(engine, "workspace", on_text=show_text, on_tool=show_tool,
-                              on_permission=ask_permission, preamble=custom_loader.preamble(agent=definition))
+                              on_permission=ask_permission, on_notice=lambda t: print(f"\n  [플랫폼] {t}"),
+                              preamble=custom_loader.preamble(agent=definition))
     except EngineError as error:
         print(error)
         return
@@ -64,8 +65,8 @@ def main():
                 break
             if not text:
                 continue
-            client.prompt(text)
-            print(f"\n  (쓴 양: {client.usage_text()})")
+            result = client.send(text)
+            print(f"\n  ({result.stop_label} · 쓴 양: {result.usage_text})")
     except EngineError as error:
         print(f"\n{error}")
     finally:
