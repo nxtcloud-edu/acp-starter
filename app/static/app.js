@@ -209,8 +209,7 @@ function permissionCard(event) {
     actions.appendChild(button(label, () => api("POST", `/api/permissions/${event.id}`, { allow }).catch(report),
                                allow ? "" : "ghost"));
   }
-  const title = (event.title || "").split("\n")[0].slice(0, 80);
-  card.append(el("b", "", `허락 요청 · ${title}`), el("div", "detail", event.detail || ""), actions);
+  card.append(el("b", "", `허락 요청 · ${event.label}`), el("div", "detail", event.detail || ""), actions);
   $("log").appendChild(card);
   scrollDown();
   cards[event.id] = card;
@@ -245,7 +244,7 @@ function handle(event) {
       scrollDown();
       break;
     case "tool":
-      add("note", `도구 · ${event.title}`);
+      add("note", `도구 · ${event.label} · ${(event.detail || "").split("\n")[0].slice(0, 120)}`);
       answer = null;
       break;
     case "permission":
@@ -258,7 +257,7 @@ function handle(event) {
       break;
     }
     case "rule":
-      add("note", `규칙(custom/rules.py) · ${event.allow ? "허락" : "거절"} · ${event.title}`);
+      add("note", `규칙(custom/rules.py) · ${event.allow ? "허락" : "거절"} · ${event.label} · ${(event.detail || "").split("\n")[0].slice(0, 120)}`);
       answer = null;
       break;
     case "rule_error":

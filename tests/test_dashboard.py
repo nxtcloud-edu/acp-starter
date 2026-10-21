@@ -180,8 +180,8 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(self.ask("안내"), "받음: 없음")
 
     def test_rule_allows_without_card(self):
-        self.write_custom("rules.py", "def decide(agent, tool_call):\n"
-                                      "    return 'allow' if tool_call['rawInput']['command'] == 'date' else 'ask'\n")
+        self.write_custom("rules.py", "def decide(agent, request):\n"
+                                      "    return 'allow' if request.command == 'date' else 'ask'\n")
         self.connect()
         self.assertTrue(self.ask("도구 써 줘").endswith("/ allow-once"))
         rule = self.wait_for(lambda e: e["type"] == "rule")
@@ -189,7 +189,7 @@ class DashboardTest(unittest.TestCase):
         self.assertFalse([e for e in self.platform.log.events if e["type"] == "permission"])
 
     def test_broken_rule_falls_back_to_card(self):
-        self.write_custom("rules.py", "def decide(agent, tool_call):\n    return 1 / 0\n")
+        self.write_custom("rules.py", "def decide(agent, request):\n    return 1 / 0\n")
         self.connect()
         self.call("POST", "/api/prompt", {"text": "도구 써 줘"})
         card = self.wait_for(lambda e: e["type"] == "permission")
@@ -204,7 +204,7 @@ class DashboardTest(unittest.TestCase):
                                  client_factory=fake_factory, custom=self.root / "custom")
         self.assertIsNone(result.delivery_error)
         text = result.path.read_text(encoding="utf-8")
-        self.assertIn("- 거절한 도구: Running: date", text)
+        self.assertIn("- 거절한 도구: 명령 실행 date", text)
         self.assertIn("/ reject", text)
         self.assertTrue(result.path.with_suffix(".sent").read_text(encoding="utf-8").startswith("일|받음: 도구 써 줘"))
 

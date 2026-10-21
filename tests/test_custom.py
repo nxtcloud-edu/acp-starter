@@ -56,17 +56,17 @@ class CustomLoaderTest(unittest.TestCase):
         self.assertEqual(custom_loader.decide("kiro", {}, ROOT / "custom"), ("ask", None))
 
     def test_decide_reads_file_each_time(self):
-        self.write("rules.py", "def decide(agent, tool_call):\n    return 'allow'\n")
+        self.write("rules.py", "def decide(agent, request):\n    return 'allow'\n")
         self.assertEqual(custom_loader.decide("kiro", {}, self.custom), ("allow", None))
-        self.write("rules.py", "def decide(agent, tool_call):\n    return 'deny'\n")
+        self.write("rules.py", "def decide(agent, request):\n    return 'deny'\n")
         self.assertEqual(custom_loader.decide("kiro", {}, self.custom), ("deny", None))
 
     def test_decide_errors_fall_back_to_ask(self):
-        self.write("rules.py", "def decide(agent, tool_call):\n    return 1 / 0\n")
+        self.write("rules.py", "def decide(agent, request):\n    return 1 / 0\n")
         decision, error = custom_loader.decide("kiro", {}, self.custom)
         self.assertEqual(decision, "ask")
         self.assertIn("ZeroDivisionError", error)
-        self.write("rules.py", "def decide(agent, tool_call):\n    return 'yes'\n")
+        self.write("rules.py", "def decide(agent, request):\n    return 'yes'\n")
         decision, error = custom_loader.decide("kiro", {}, self.custom)
         self.assertEqual(decision, "ask")
         self.assertIn("'yes'", error)
@@ -76,14 +76,6 @@ class CustomLoaderTest(unittest.TestCase):
         self.assertIsNone(custom_loader.deliver("일", "a.md", "답", ROOT / "custom"))
         self.write("deliver.py", "def deliver(task, path, text):\n    raise RuntimeError('웹훅 실패')\n")
         self.assertIn("웹훅 실패", custom_loader.deliver("일", "a.md", "답", self.custom))
-
-    def test_tool_detail(self):
-        self.assertEqual(custom_loader.tool_detail({"rawInput": {"command": "date"}}), "date")
-        self.assertEqual(custom_loader.tool_detail({"rawInput": {"command": ["ls", "-a"]}}), "ls -a")
-        self.assertEqual(custom_loader.tool_detail({"rawInput": {"path": "a.md"}}), "a.md")
-        self.assertEqual(custom_loader.tool_detail({}), "")
-        codex = {"rawInput": {"command": '"printf \'%s\' \'{\\"a\\": 1}\' | python3 x.py"'}}
-        self.assertEqual(custom_loader.tool_detail(codex), "printf '%s' '{\"a\": 1}' | python3 x.py")
 
     def test_load_env_does_not_override(self):
         env_file = self.custom / ".env"

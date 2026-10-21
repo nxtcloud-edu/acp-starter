@@ -28,17 +28,16 @@ def run_task(engine, prompt, name=None, workspace=WORKSPACE, client_factory=AcpC
     """일을 한 번 맡기고 Result(결과 파일 경로, 보내기 오류)를 돌려준다."""
     answer, tools, refused, notes = [], [], [], []
 
-    def on_tool(update):
-        if update.get("sessionUpdate") == "tool_call":
-            tools.append(update.get("title", ""))
+    def on_tool(request):
+        tools.append(f"{request.label} {request.detail}".strip())
 
-    def on_permission(tool_call):
-        decision, error = custom_loader.decide(engine, tool_call, custom)
+    def on_permission(request):
+        decision, error = custom_loader.decide(engine, request, custom)
         if error:
             notes.append(error)
         if decision == "allow":
             return True
-        refused.append(tool_call.get("title", ""))
+        refused.append(f"{request.label} {request.detail}".strip())
         return False
 
     client = client_factory(workspace, engine, on_text=answer.append, on_tool=on_tool,

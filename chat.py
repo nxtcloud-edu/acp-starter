@@ -15,19 +15,18 @@ def show_text(text):
     print(text, end="", flush=True)
 
 
-def show_tool(update):
-    if update.get("sessionUpdate") == "tool_call":
-        print(f"\n  [도구] {update.get('title')}", flush=True)
+def show_tool(request):
+    print(f"\n  [도구] {request.label} {request.detail}", flush=True)
 
 
-def ask_permission(tool_call):
-    decision, error = custom_loader.decide(sys.argv[1] if len(sys.argv) > 1 else "kiro", tool_call)
+def ask_permission(request):
+    decision, error = custom_loader.decide(sys.argv[1] if len(sys.argv) > 1 else "kiro", request)
     if error:
         print(f"\n  [규칙 오류] {error}")
     if decision != "ask":
-        print(f"\n  [규칙] {tool_call.get('title')} → {decision}")
+        print(f"\n  [규칙] {request.label} {request.detail} → {decision}")
         return decision == "allow"
-    print(f"\n  [허락 요청] {tool_call.get('title')}")
+    print(f"\n  [허락 요청] {request.label} {request.detail}")
     answer = input("  허락할까요? [y/N] ").strip().lower()
     return answer == "y"
 

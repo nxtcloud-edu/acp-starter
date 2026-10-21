@@ -107,13 +107,16 @@ def _load(name, custom=CUSTOM):
     return module
 
 
-def decide(agent, tool_call, custom=CUSTOM):
-    """custom/rules.py의 decide()를 부른다. 돌려주는 값: (결정, 오류 글 또는 None)."""
+def decide(agent, request, custom=CUSTOM):
+    """custom/rules.py의 decide(agent, request)를 부른다. request는 acp_client.ToolRequest다.
+
+    돌려주는 값: (결정, 오류 글 또는 None).
+    """
     try:
         module = _load("rules", custom)
         if module is None:
             return "ask", None
-        result = module.decide(agent, tool_call)
+        result = module.decide(agent, request)
     except Exception as error:  # 학생 코드의 어떤 오류도 플랫폼을 멈추지 않게 한다
         return "ask", f"rules.py 오류: {error!r}"
     if result not in DECISIONS:
@@ -130,28 +133,6 @@ def deliver(task, path, text, custom=CUSTOM):
     except Exception as error:
         return f"deliver.py 오류: {error!r}"
     return None
-
-
-def tool_detail(tool_call):
-    """허락 요청에서 사람이 읽을 세부(명령이나 파일 경로)를 꺼낸다."""
-    raw = tool_call.get("rawInput") or {}
-    if not isinstance(raw, dict):
-        return str(raw)
-    for key in ("command", "cmd", "file_path", "path", "url"):
-        value = raw.get(key)
-        if not value:
-            continue
-        if isinstance(value, list):
-            return " ".join(str(v) for v in value)
-        value = str(value)
-        if len(value) > 1 and value[0] == value[-1] == '"':
-            # Codex는 명령을 따옴표로 한 번 더 감싸 보낸다.
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                pass
-        return value
-    return ""
 
 
 def load_env(path=ROOT / ".env"):

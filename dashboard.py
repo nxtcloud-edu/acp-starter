@@ -310,25 +310,25 @@ class Platform:
     def _on_text(self, text):
         self.log.add(type="text", text=text)
 
-    def _on_tool(self, update):
-        if update.get("sessionUpdate") == "tool_call":
-            self.log.add(type="tool", title=update.get("title", ""))
+    def _on_tool(self, request):
+        self.log.add(type="tool", kind=request.kind, label=request.label, detail=request.detail)
 
-    def _ask(self, tool_call):
+    def _ask(self, request):
         """에이전트가 허락을 물으면 먼저 custom/rules.py에 묻고, "ask"이면 카드를 띄워 사람의 답을 기다린다."""
-        title, detail = tool_call.get("title", ""), custom_loader.tool_detail(tool_call)
-        decision, error = custom_loader.decide(self.agent, tool_call, self.custom)
+        decision, error = custom_loader.decide(self.agent, request, self.custom)
         if error:
             self.log.add(type="rule_error", message=error)
         if decision != "ask":
-            self.log.add(type="rule", title=title, detail=detail, allow=decision == "allow")
+            self.log.add(type="rule", kind=request.kind, label=request.label, detail=request.detail,
+                         allow=decision == "allow")
             return decision == "allow"
         with self.lock:
             self.next_permission += 1
             number = self.next_permission
             waiter = {"event": threading.Event(), "allow": False}
             self.pending[number] = waiter
-        self.log.add(type="permission", id=number, title=title, detail=detail)
+        self.log.add(type="permission", id=number, kind=request.kind, label=request.label,
+                     detail=request.detail, title=request.title)
         answered = waiter["event"].wait(PERMISSION_WAIT_SECONDS)
         with self.lock:
             self.pending.pop(number, None)

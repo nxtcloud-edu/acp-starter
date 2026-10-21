@@ -37,7 +37,7 @@ class AcpClientTest(unittest.TestCase):
     def test_permission_allowed_by_callback(self):
         chunks, asked = [], []
         client = self.make(on_text=chunks.append,
-                           on_permission=lambda call: asked.append(call["title"]) or True)
+                           on_permission=lambda request: asked.append(request.title) or True)
         client.start()
         client.prompt("도구 써 줘")
         self.assertEqual(asked, ["Running: date"])
@@ -52,7 +52,7 @@ class AcpClientTest(unittest.TestCase):
 
     def test_tool_updates_reach_callback(self):
         tools = []
-        client = self.make(on_tool=lambda update: tools.append(update["title"]))
+        client = self.make(on_tool=lambda request: tools.append(request.title))
         client.start()
         client.prompt("도구 써 줘")
         self.assertEqual(tools, ["Running: date"])
