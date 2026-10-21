@@ -16,42 +16,42 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 import acp_client  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
-AGENTS = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))
+ENGINES = json.loads((ROOT / "engines.json").read_text(encoding="utf-8"))
 # 모든 도구를 묻지 않고 허락하는 모드. 이 레포에서는 쓰지 않는다.
 UNSAFE_MODES = {"bypassPermissions", "acceptEdits", "auto", "agent", "agent-full-access", "full-access"}
 
 
 class SafetyTest(unittest.TestCase):
     def test_every_agent_starts_in_a_safe_mode(self):
-        for name, agent in AGENTS.items():
-            with self.subTest(agent=name):
-                self.assertTrue(agent.get("safe_mode") or agent.get("expect_mode"))
-                self.assertNotIn(agent.get("safe_mode"), UNSAFE_MODES)
+        for name, engine in ENGINES.items():
+            with self.subTest(engine=name):
+                self.assertTrue(engine.get("safe_mode") or engine.get("expect_mode"))
+                self.assertNotIn(engine.get("safe_mode"), UNSAFE_MODES)
 
     def test_kiro_agent_allows_only_read_without_asking(self):
-        starter = json.loads((ROOT / "workspace" / ".kiro" / "agents" / "starter.json").read_text(encoding="utf-8"))
-        self.assertEqual(starter["allowedTools"], ["read"])
-        self.assertEqual(starter["resources"], [])
+        kiro = json.loads((ROOT / "workspace" / ".kiro" / "agents" / "engine.json").read_text(encoding="utf-8"))
+        self.assertEqual(kiro["allowedTools"], ["read"])
+        self.assertEqual(kiro["resources"], [])
 
     def test_codex_starts_read_only_and_skips_repo_agents_md(self):
-        codex = AGENTS["codex"]
+        codex = ENGINES["codex"]
         self.assertEqual(codex["env"]["INITIAL_AGENT_MODE"], "read-only")
         self.assertIn("project_doc_max_bytes = 0", codex["home_files"]["config.toml"])
 
     def test_claude_reads_no_setting_files(self):
-        self.assertEqual(AGENTS["claude"]["session_meta"]["claudeCode"]["options"]["settingSources"], [])
+        self.assertEqual(ENGINES["claude"]["session_meta"]["claudeCode"]["options"]["settingSources"], [])
 
     def test_sandbox_writes_home_files_once(self):
         root = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root)
-        agent = {"home_env": "CODEX_HOME", "home_files": {"config.toml": "x = 1\n"}}
+        engine = {"home_env": "CODEX_HOME", "home_files": {"config.toml": "x = 1\n"}}
         with mock.patch.object(acp_client, "ROOT", root):
-            env = acp_client.sandbox_env("codex", agent)
+            env = acp_client.sandbox_env("codex", engine)
             config = root / ".homes" / "codex" / "config.toml"
             self.assertEqual(env["CODEX_HOME"], str(root / ".homes" / "codex"))
             self.assertEqual(config.read_text(), "x = 1\n")
             config.write_text("x = 2\n")
-            acp_client.sandbox_env("codex", agent)
+            acp_client.sandbox_env("codex", engine)
             self.assertEqual(config.read_text(), "x = 2\n")
 
     def test_secrets_and_homes_are_ignored(self):

@@ -47,21 +47,21 @@ class ApiError(Exception):
         self.status = status
 
 
-def installed(agent):
-    """에이전트를 실행하고 로그인하는 데 필요한 명령이 모두 있는지 본다."""
-    commands = [agent["command"][0]] + [agent[k][0] for k in ("login", "status") if agent.get(k)]
+def installed(engine):
+    """엔진을 실행하고 로그인하는 데 필요한 명령이 모두 있는지 본다."""
+    commands = [engine["command"][0]] + [engine[k][0] for k in ("login", "status") if engine.get(k)]
     return all(shutil.which(command) for command in commands)
 
 
 def check_login(name):
     """샌드박스 홈의 로그인 상태를 본다. 알 수 없으면 None."""
-    agent = acp_client.load_agent(name)
-    command = agent.get("status")
+    engine = acp_client.load_engine(name)
+    command = engine.get("status")
     if not command or shutil.which(command[0]) is None:
         return None
     try:
         result = subprocess.run([shutil.which(command[0]), *command[1:]],
-                                env=acp_client.sandbox_env(name, agent),
+                                env=acp_client.sandbox_env(name, engine),
                                 capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -98,29 +98,29 @@ class Logins:
                 "terminal"은 화면에서 하지 않고 터미널 명령을 알려 준다(Kiro. 로그인이 컴퓨터 전체에 걸린다).
     """
 
-    def __init__(self, log, load_agent=acp_client.load_agent, env_for=acp_client.sandbox_env,
+    def __init__(self, log, load_engine=acp_client.load_engine, env_for=acp_client.sandbox_env,
                  is_logged_in=check_login):
         self.log = log
-        self.load_agent = load_agent
+        self.load_engine = load_engine
         self.env_for = env_for
         self.is_logged_in = is_logged_in
         self.lock = threading.Lock()
         self.running = {}            # 에이전트 이름 → 로그인 프로세스
 
-    def _agent(self, name):
+    def _engine(self, name):
         try:
-            return self.load_agent(name)
+            return self.load_engine(name)
         except AcpError as error:
             raise ApiError(400, str(error))
 
     def start(self, name):
-        agent = self._agent(name)
-        mode = agent.get("login_mode", "terminal")
+        engine = self._engine(name)
+        mode = engine.get("login_mode", "terminal")
         if mode == "terminal":
-            raise ApiError(400, f"{name}은 터미널에서 로그인합니다: {' '.join(agent['login'])}")
-        executable = shutil.which(agent["login"][0])
+            raise ApiError(400, f"{name}은 터미널에서 로그인합니다: {' '.join(engine['login'])}")
+        executable = shutil.which(engine["login"][0])
         if executable is None:
-            raise ApiError(400, f"{agent['login'][0]}를 찾지 못했습니다. README의 준비 절을 보세요.")
+            raise ApiError(400, f"{engine['login'][0]}를 찾지 못했습니다. README의 준비 절을 보세요.")
         # 로그인 명령은 시작하자마자 있던 로그인을 지울 수 있다(codex). 그래서 로그인된 상태에서는 시작하지 않는다.
         if self.is_logged_in(name) is True:
             raise ApiError(409, f"{name}은 이미 로그인되어 있습니다. 다른 계정으로 바꾸려면 먼저 로그아웃합니다.")
@@ -128,7 +128,7 @@ class Logins:
             old = self.running.get(name)
             if old and old.poll() is None:
                 raise ApiError(409, "이미 로그인을 진행하는 중입니다.")
-            process = subprocess.Popen([executable, *agent["login"][1:]], env=self.env_for(name, agent),
+            process = subprocess.Popen([executable, *engine["login"][1:]], env=self.env_for(name, engine),
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                        errors="replace", bufsize=1)
@@ -187,14 +187,14 @@ class Logins:
         process.kill()
 
     def logout(self, name):
-        agent = self._agent(name)
-        command = agent.get("logout")
+        engine = self._engine(name)
+        command = engine.get("logout")
         if not command:
             raise ApiError(400, f"{name}은 화면에서 로그아웃하지 않습니다. 로그인이 컴퓨터 전체에 걸려 있기 때문입니다.")
         executable = shutil.which(command[0])
         if executable is None:
             raise ApiError(400, f"{command[0]}를 찾지 못했습니다.")
-        result = subprocess.run([executable, *command[1:]], env=self.env_for(name, agent),
+        result = subprocess.run([executable, *command[1:]], env=self.env_for(name, engine),
                                 capture_output=True, text=True, timeout=30)
         self.log.add(type="login", agent=name, state="logged_out" if result.returncode == 0 else "failed",
                      message=ANSI.sub("", result.stdout + result.stderr).strip()[-300:])
@@ -229,8 +229,8 @@ class Platform:
 
     # ---- 에이전트와 대화 ----
 
-    def agents(self):
-        configs = json.loads(acp_client.AGENTS_FILE.read_text(encoding="utf-8"))
+    def engines(self):
+        configs = json.loads(acp_client.ENGINES_FILE.read_text(encoding="utf-8"))
         names = list(configs)
         results = {}
 
@@ -252,7 +252,7 @@ class Platform:
 
     def connect(self, agent):
         try:
-            acp_client.load_agent(agent)
+            acp_client.load_engine(agent)
         except AcpError as error:
             raise ApiError(400, str(error))
         with self.lock:
@@ -455,7 +455,7 @@ def make_handler(platform):
                 if len(parts) == 2 and parts[0] == "outbox":
                     return self.send_file(platform.outbox_path(parts[1]), sandbox=True)
                 if parts == ["api", "agents"]:
-                    return self.send_json(200, platform.agents())
+                    return self.send_json(200, platform.engines())
                 if parts == ["api", "brand"]:
                     return self.send_json(200, platform.brand())
                 if parts == ["api", "skills"]:

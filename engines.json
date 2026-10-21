@@ -4,10 +4,10 @@
       "kiro-cli",
       "acp",
       "--agent",
-      "starter"
+      "engine"
     ],
     "home_env": "KIRO_HOME",
-    "expect_mode": "starter",
+    "expect_mode": "engine",
     "login_mode": "terminal",
     "login": [
       "kiro-cli",

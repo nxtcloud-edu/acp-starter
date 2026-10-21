@@ -12,7 +12,7 @@
 
 | 에이전트 | 샌드박스 홈을 가리키는 환경변수 | 로그인 | 지침 파일을 막는 방법 |
 |---|---|---|---|
-| Kiro | `KIRO_HOME` | 평소 Kiro CLI 로그인을 그대로 쓴다 | `starter` 에이전트의 `resources`가 비어 있다 |
+| Kiro | `KIRO_HOME` | 평소 Kiro CLI 로그인을 그대로 쓴다 | Kiro 엔진 설정(`engine.json`)의 `resources`가 비어 있다 |
 | Claude | `CLAUDE_CONFIG_DIR` | 샌드박스에 한 번 따로 로그인한다 | `settingSources: []`(설정 파일과 `CLAUDE.md`를 읽지 않는다) |
 | Codex | `CODEX_HOME` | 샌드박스에 한 번 따로 로그인한다 | 샌드박스의 `config.toml`에 `project_doc_max_bytes = 0` |
 
@@ -24,7 +24,7 @@ Claude는 작업 폴더의 상위 폴더를 거슬러 올라가며 `CLAUDE.md`�
 
 | 에이전트 | 안전 모드 | 묻는 것 |
 |---|---|---|
-| Kiro | `starter.json`의 `allowedTools`에 `read`만 | `read` 밖의 도구 |
+| Kiro | `engine.json`의 `allowedTools`에 `read`만 | `read` 밖의 도구 |
 | Claude | `default` | 파일 고치기, 명령 실행. 단 `date` 같은 읽기 전용 명령은 묻지 않고 실행한다 |
 | Codex | `read-only` | 파일 고치기, 인터넷 접근. 읽기 명령은 묻지 않고 읽기만 되는 샌드박스 안에서 실행한다 |
 
@@ -41,7 +41,7 @@ Claude는 작업 폴더의 상위 폴더를 거슬러 올라가며 `CLAUDE.md`�
 | Claude | Node.js(`npx` 포함), [Claude Code](https://code.claude.com/docs) (`claude` 명령) | Claude Pro·Max 구독 |
 | Codex | Node.js(`npx` 포함), [Codex CLI](https://developers.openai.com/codex/cli) (`codex` 명령) | ChatGPT 구독 |
 
-Claude와 Codex의 ACP 어댑터는 처음 실행할 때 `npx`가 내려받는다. 버전은 `agents.json`에 고정했다.
+Claude와 Codex의 ACP 어댑터는 처음 실행할 때 `npx`가 내려받는다. 버전은 `engines.json`에 고정했다.
 
 ## 실행
 
@@ -147,7 +147,7 @@ notes.md를 읽고, 마감이 있는 일만 날짜 순서로 표로 정리해 �
 | `안내/` | 최종 과제 안내와 계획서·기록 틀 |
 | `acp_client.py` | ACP 클라이언트. 에이전트를 샌드박스 홈으로 실행하고, 안전 모드로 바꾸고, 메시지를 주고받는다 |
 | `custom_loader.py` | `custom/`와 스킬을 읽어 플랫폼에 잇는다. 플랫폼 안내를 만든다 |
-| `agents.json` | 에이전트마다 실행 명령, 샌드박스 홈, 안전 모드, 로그인 방식 |
+| `engines.json` | 에이전트마다 실행 명령, 샌드박스 홈, 안전 모드, 로그인 방식 |
 | `dashboard.py` | 대시보드의 서버. JSON API, 대화 하나, 로그인, 일 실행, 스케줄, 결과함 |
 | `app/static/` | 대시보드의 화면(`index.html`, `style.css`, `app.js`) |
 | `runner.py` | 사람 없이 일을 한 번 돌리는 공용 코드. `run_once.py`와 대시보드가 함께 쓴다 |
@@ -156,7 +156,7 @@ notes.md를 읽고, 마감이 있는 일만 날짜 순서로 표로 정리해 �
 | `workspace/` | 플랫폼 안 에이전트의 작업 폴더 |
 | `workspace/skills/` | 스킬. 수업 스킬 `memo-to-json`, `data-to-html` |
 | `workspace/자료/발표준비/` | 스킬을 해 볼 예시 자료(메모 사진, md, csv) |
-| `workspace/.kiro/agents/starter.json` | Kiro 에이전트 설정 |
+| `workspace/.kiro/agents/engine.json` | Kiro 에이전트 설정 |
 | `tests/` | 가짜 에이전트와 가짜 로그인으로 도는 테스트. `test_safety.py`는 안전 모드를 지킨다 |
 
 ## ACP 흐름

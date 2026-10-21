@@ -106,16 +106,16 @@ class AcpClientTest(unittest.TestCase):
 
     def test_unknown_agent_name_raises(self):
         with self.assertRaises(AcpError):
-            acp_client.load_agent("없는에이전트")
+            acp_client.load_engine("없는엔진")
 
     def test_agents_file_has_three_agents_with_homes(self):
         for name in ("kiro", "claude", "codex"):
-            agent = acp_client.load_agent(name)
+            agent = acp_client.load_engine(name)
             self.assertIn("home_env", agent)
             self.assertIn("command", agent)
-        self.assertEqual(acp_client.load_agent("claude")["safe_mode"], "default")
-        self.assertEqual(acp_client.load_agent("codex")["safe_mode"], "read-only")
-        self.assertEqual(acp_client.load_agent("claude")["session_meta"],
+        self.assertEqual(acp_client.load_engine("claude")["safe_mode"], "default")
+        self.assertEqual(acp_client.load_engine("codex")["safe_mode"], "read-only")
+        self.assertEqual(acp_client.load_engine("claude")["session_meta"],
                          {"claudeCode": {"options": {"settingSources": []}}})
 
 

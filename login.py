@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from acp_client import AcpError, load_agent, sandbox_env
+from acp_client import AcpError, load_engine, sandbox_env
 
 
 def main():
@@ -20,16 +20,16 @@ def main():
         return
     name = sys.argv[1]
     try:
-        agent = load_agent(name)
+        engine = load_engine(name)
     except AcpError as error:
         print(error)
         return
-    command = agent["status"] if "--status" in sys.argv else agent["login"]
+    command = engine["status"] if "--status" in sys.argv else engine["login"]
     executable = shutil.which(command[0])
     if executable is None:
         print(f"{command[0]}를 찾지 못했습니다. README의 준비 절을 보세요.")
         return
-    subprocess.run([executable, *command[1:]], env=sandbox_env(name, agent))
+    subprocess.run([executable, *command[1:]], env=sandbox_env(name, engine))
 
 
 if __name__ == "__main__":

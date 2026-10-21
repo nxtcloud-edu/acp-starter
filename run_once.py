@@ -13,23 +13,23 @@ import json
 import sys
 
 import custom_loader
-from acp_client import AGENTS_FILE
+from acp_client import ENGINES_FILE
 from runner import WORKSPACE, run_task
 
-AGENT_NAMES = json.loads(AGENTS_FILE.read_text(encoding="utf-8"))
+ENGINE_NAMES = json.loads(ENGINES_FILE.read_text(encoding="utf-8"))
 
 
 def main():
     custom_loader.load_env()
     args = sys.argv[1:]
-    agent = "kiro"
-    if args and args[0] in AGENT_NAMES:
-        agent = args.pop(0)
+    engine = "kiro"
+    if args and args[0] in ENGINE_NAMES:
+        engine = args.pop(0)
     if args:
         prompt = " ".join(args)
     else:
         prompt = (WORKSPACE / "task.md").read_text(encoding="utf-8")
-    result = run_task(agent, prompt)
+    result = run_task(engine, prompt)
     print(result.path)
     if result.delivery_error:
         print(result.delivery_error)

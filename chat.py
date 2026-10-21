@@ -33,9 +33,9 @@ def ask_permission(tool_call):
 
 
 def main():
-    agent = sys.argv[1] if len(sys.argv) > 1 else "kiro"
+    engine = sys.argv[1] if len(sys.argv) > 1 else "kiro"
     try:
-        client = AcpClient("workspace", agent, on_text=show_text, on_tool=show_tool,
+        client = AcpClient("workspace", engine, on_text=show_text, on_tool=show_tool,
                            on_permission=ask_permission, preamble=custom_loader.preamble())
     except AcpError as error:
         print(error)
@@ -46,7 +46,7 @@ def main():
         print(error)
         client.close()
         return
-    print(f"{agent} 에이전트와 대화를 시작합니다. 끝내려면 /exit 를 입력하세요.")
+    print(f"{engine} 엔진과 대화를 시작합니다. 끝내려면 /exit 를 입력하세요.")
     try:
         while True:
             try:

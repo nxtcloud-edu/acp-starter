@@ -1,9 +1,9 @@
-"""ACP로 에이전트(Kiro, Claude, Codex)와 대화하는 가장 작은 클라이언트.
+"""ACP로 엔진(Kiro, Claude, Codex)과 대화하는 가장 작은 클라이언트.
 
 흐름: 에이전트 실행 → initialize → session/new → (안전 모드) → session/prompt
 메시지는 JSON 한 줄씩 표준 입출력으로 주고받는다(JSON-RPC 2.0).
 
-에이전트마다 이 레포 안의 샌드박스 홈(.homes/<이름>/)을 쓴다.
+엔진마다 이 레포 안의 샌드박스 홈(.homes/<이름>/)을 쓴다.
 그래서 내 컴퓨터의 전역 설정, 스킬, 플러그인, 기억을 가져오지 않는다.
 """
 
@@ -14,49 +14,49 @@ import shutil
 import subprocess
 
 ROOT = pathlib.Path(__file__).parent
-AGENTS_FILE = ROOT / "agents.json"
+ENGINES_FILE = ROOT / "engines.json"
 
 
 class AcpError(Exception):
     """연결이나 응답이 잘못되었을 때 낸다."""
 
 
-def load_agent(name):
-    """agents.json에서 에이전트 하나의 설정을 읽는다."""
-    agents = json.loads(AGENTS_FILE.read_text(encoding="utf-8"))
-    if name not in agents:
-        raise AcpError(f"에이전트 '{name}'가 agents.json에 없습니다. 고를 수 있는 것: {', '.join(agents)}")
-    return agents[name]
+def load_engine(name):
+    """engines.json에서 엔진 하나의 설정을 읽는다."""
+    engines = json.loads(ENGINES_FILE.read_text(encoding="utf-8"))
+    if name not in engines:
+        raise AcpError(f"엔진 '{name}'가 engines.json에 없습니다. 고를 수 있는 것: {', '.join(engines)}")
+    return engines[name]
 
 
-def sandbox_env(name, agent):
+def sandbox_env(name, engine):
     """샌드박스 홈을 가리키는 환경변수를 만든다. 폴더가 없으면 만든다."""
     home = ROOT / ".homes" / name
     home.mkdir(parents=True, exist_ok=True)
     # 샌드박스 홈에 둘 설정 파일. 이미 있으면 덮어쓰지 않는다.
-    for file_name, content in agent.get("home_files", {}).items():
+    for file_name, content in engine.get("home_files", {}).items():
         path = home / file_name
         if not path.exists():
             path.write_text(content, encoding="utf-8")
     env = dict(os.environ)
-    env[agent["home_env"]] = str(home)
-    env.update(agent.get("env", {}))
+    env[engine["home_env"]] = str(home)
+    env.update(engine.get("env", {}))
     return env
 
 
 class AcpClient:
-    def __init__(self, workspace, agent="kiro", on_text=None, on_tool=None,
+    def __init__(self, workspace, engine="kiro", on_text=None, on_tool=None,
                  on_permission=None, preamble=None, command=None, env=None, config=None):
         # workspace: 에이전트가 일하는 폴더.
-        # agent: agents.json의 이름(kiro, claude, codex).
+        # engine: engines.json의 이름(kiro, claude, codex).
         # on_text(text): 답의 조각이 올 때마다 부른다.
         # on_tool(update): 에이전트가 도구를 쓰기 시작하거나 끝낼 때 부른다.
         # on_permission(tool_call) -> bool: 허락이 필요할 때 부른다. 없으면 모두 거절한다.
         # preamble: 첫 질문 앞에 붙여 보낼 플랫폼 안내. ACP에는 시스템 프롬프트 칸이 없다.
         # command, env, config: 테스트에서 실행 명령과 설정을 바꿀 때만 쓴다.
         self.workspace = os.path.abspath(workspace)
-        self.name = agent
-        self.config = config if config is not None else load_agent(agent)
+        self.name = engine
+        self.config = config if config is not None else load_engine(engine)
         self.on_text = on_text or (lambda text: None)
         self.on_tool = on_tool or (lambda update: None)
         self.on_permission = on_permission or (lambda tool_call: False)

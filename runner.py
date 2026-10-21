@@ -23,7 +23,7 @@ TIME_LIMIT_SECONDS = 300
 Result = collections.namedtuple("Result", "path delivery_error")
 
 
-def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpClient,
+def run_task(engine, prompt, name=None, workspace=WORKSPACE, client_factory=AcpClient,
              custom=custom_loader.CUSTOM):
     """일을 한 번 맡기고 Result(결과 파일 경로, 보내기 오류)를 돌려준다."""
     answer, tools, refused, notes = [], [], [], []
@@ -33,7 +33,7 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpCl
             tools.append(update.get("title", ""))
 
     def on_permission(tool_call):
-        decision, error = custom_loader.decide(agent, tool_call, custom)
+        decision, error = custom_loader.decide(engine, tool_call, custom)
         if error:
             notes.append(error)
         if decision == "allow":
@@ -41,7 +41,7 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpCl
         refused.append(tool_call.get("title", ""))
         return False
 
-    client = client_factory(workspace, agent, on_text=answer.append, on_tool=on_tool,
+    client = client_factory(workspace, engine, on_text=answer.append, on_tool=on_tool,
                             on_permission=on_permission,
                             preamble=custom_loader.preamble(workspace, custom))
     timer = threading.Timer(TIME_LIMIT_SECONDS, client.close)
@@ -59,14 +59,14 @@ def run_task(agent, prompt, name=None, workspace=WORKSPACE, client_factory=AcpCl
     outbox = pathlib.Path(workspace) / "outbox"
     outbox.mkdir(exist_ok=True)
     label = f"_{name}" if name else ""
-    path = outbox / f"{now:%Y-%m-%d_%H%M%S}_{agent}{label}.md"
+    path = outbox / f"{now:%Y-%m-%d_%H%M%S}_{engine}{label}.md"
     text = "".join(answer).strip()
     lines = [
         f"# 실행 결과 {now:%Y-%m-%d %H:%M}",
         "",
         f"- 일: {name or '바로 맡긴 질문'}",
         f"- 끝난 까닭: {stop_reason}",
-        f"- 에이전트: {agent}",
+        f"- 에이전트: {engine}",
         f"- 쓴 양: {client.usage_text()}",
         f"- 쓴 도구: {', '.join(tools) or '없음'}",
         f"- 거절한 도구: {', '.join(refused) or '없음'}",

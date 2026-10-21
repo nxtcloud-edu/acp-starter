@@ -12,7 +12,7 @@ ACP(Agent Client Protocol)로 Kiro, Claude, Codex 가운데 하나를 부르는 
 | 파일 | 맡는 일 |
 |---|---|
 | `acp_client.py` | ACP 클라이언트. 에이전트를 샌드박스 홈(`.homes/<이름>/`)으로 실행하고, 안전 모드로 바꾸고, 메시지를 주고받는다 |
-| `agents.json` | 에이전트마다 실행 명령, 샌드박스 홈, 안전 모드, 로그인 방식 |
+| `engines.json` | 에이전트마다 실행 명령, 샌드박스 홈, 안전 모드, 로그인 방식 |
 | `custom_loader.py` | `custom/`와 `workspace/skills/`를 읽어 플랫폼에 잇는다. 플랫폼 안내(첫 질문 앞에 붙는 글)를 만든다 |
 | `custom/` | 사용자가 먼저 바꾸는 곳: `brand.json`(이름과 색), `업무.md`(업무와 역할), `rules.py`(허락 규칙), `deliver.py`(결과 보내기) |
 | `dashboard.py` | 대시보드 서버. JSON API만 낸다. 대화, 허락 카드, 일 실행과 스케줄, 결과함, 로그인 |
@@ -33,8 +33,8 @@ ACP(Agent Client Protocol)로 Kiro, Claude, Codex 가운데 하나를 부르는 
 
 ## 하지 않을 것
 
-- `agents.json`의 `safe_mode`를 Claude `bypassPermissions`·`acceptEdits`·`auto`, Codex `agent`·`agent-full-access`로 바꾸지 않는다. 모든 도구를 묻지 않고 실행하게 된다. `tests/test_safety.py`가 이를 막는다.
-- Kiro `workspace/.kiro/agents/starter.json`의 `allowedTools`에 `read` 밖의 도구를 넣지 않는다. 허락은 `custom/rules.py`로 정한다.
+- `engines.json`의 `safe_mode`를 Claude `bypassPermissions`·`acceptEdits`·`auto`, Codex `agent`·`agent-full-access`로 바꾸지 않는다. 모든 도구를 묻지 않고 실행하게 된다. `tests/test_safety.py`가 이를 막는다.
+- Kiro `workspace/.kiro/agents/engine.json`의 `allowedTools`에 `read` 밖의 도구를 넣지 않는다. 허락은 `custom/rules.py`로 정한다.
 - Claude의 `settingSources: []`와 Codex의 `project_doc_max_bytes = 0`을 지우지 않는다. 지우면 플랫폼 안의 에이전트가 사용자의 전역 설정이나 이 파일을 읽는다.
 - `.homes/`(로그인 정보), `.env`(시크릿)를 커밋하지 않는다. 시크릿은 코드와 문서에 적지 않고 `.env`에 둔다.
 - 대시보드를 `127.0.0.1` 밖으로 열지 않는다. 인증이 없다.

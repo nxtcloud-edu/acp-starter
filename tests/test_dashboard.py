@@ -24,17 +24,17 @@ from acp_client import AcpClient  # noqa: E402
 FAKE = [sys.executable, str(pathlib.Path(__file__).parent / "fake_agent.py"), "starter"]
 FAKE_LOGIN = str(pathlib.Path(__file__).parent / "fake_login.py")
 CONFIG = {"home_env": "KIRO_HOME", "expect_mode": "starter"}
-LOGIN_AGENTS = {
+LOGIN_ENGINES = {
     "kiro": {"login": ["kiro-cli", "login"], "login_mode": "terminal"},
     "claude": {"login": [sys.executable, FAKE_LOGIN, "code"], "login_mode": "code"},
     "codex": {"login": [sys.executable, FAKE_LOGIN, "device"], "login_mode": "device"},
 }
 
 
-def fake_login_agent(name):
-    if name not in LOGIN_AGENTS:
-        raise dashboard.AcpError("없는 에이전트")
-    return LOGIN_AGENTS[name]
+def fake_login_engine(name):
+    if name not in LOGIN_ENGINES:
+        raise dashboard.AcpError("없는 엔진")
+    return LOGIN_ENGINES[name]
 
 
 def fake_factory(workspace, agent, **callbacks):
@@ -52,7 +52,7 @@ class DashboardTest(unittest.TestCase):
                                            status_checker=lambda name: True,
                                            install_checker=lambda agent: True)
         self.logged_in = set()
-        self.platform.logins = dashboard.Logins(self.platform.log, load_agent=fake_login_agent,
+        self.platform.logins = dashboard.Logins(self.platform.log, load_engine=fake_login_engine,
                                                 env_for=lambda name, agent: dict(os.environ),
                                                 is_logged_in=lambda name: name in self.logged_in)
         self.server = dashboard.serve(self.platform, port=0)
@@ -140,7 +140,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("받음: 오늘 할 일을 정리해 줘", body["text"])
 
     def test_outbox_rejects_paths_outside(self):
-        status, _ = self.call("GET", "/api/outbox/..%2F..%2Fagents.json")
+        status, _ = self.call("GET", "/api/outbox/..%2F..%2Fengines.json")
         self.assertEqual(status, 404)
 
     def test_agents_lists_login_state(self):
