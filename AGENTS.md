@@ -11,19 +11,22 @@
 
 ## 가장 중요한 규칙: 엔진이 바뀌어도 플랫폼 기능은 그대로 돈다
 
-- 엔진마다 다른 것은 엔진 층(`acp_client.py`, `engines.json`, `workspace/.kiro/agents/engine.json`, `login.py`)에만 둔다.
+흐름은 하나다. 사용자의 입력 → 플랫폼(엔진 이름을 모름) → 엔진 어댑터가 그 엔진에 맞는 형식으로 바꿔 보냄 → 엔진 → 엔진 어댑터가 하나의 형식(`ToolRequest`, `TurnResult`)으로 포장 → 플랫폼이 화면 표시와 기능 수행.
+
+- 엔진마다 다른 것은 엔진 층(`engines/`, `login.py`)에만 둔다. 엔진 하나는 `engines/<이름>.py` 하나다. 공통 통역은 `engines/base.py`다.
 - 플랫폼 층(`custom_loader.py`, `dashboard.py`, `runner.py`, `app/static/`)과 `custom/`의 코드는 엔진 이름을 문자열로 쓰지 않는다. `tests/test_engine_agnostic.py`가 확인한다.
-- 새 기능은 플랫폼이 직접 한다. 엔진만이 가진 기능(Kiro 에이전트 파일의 prompt, Claude의 `CLAUDE.md`·스킬·훅, Codex의 `AGENTS.md`·스킬)에 기대지 않는다. 그런 곳에 넣은 동작은 엔진을 바꾸면 사라진다.
-- 에이전트에게 무언가를 알려야 하면 플랫폼 안내(`custom_loader.preamble`)에 넣는다. 도구 요청을 다루려면 `ToolRequest`(`kind`, `command`, `path`, `url`)를 쓴다. 엔진이 보낸 원래 모양(`raw`)에 기대는 코드는 쓰지 않는다.
-- 새 엔진의 모양이 다르면 `acp_client.tool_request`에서 맞추고, 그 모양을 `tests/test_tool_request.py`에 더한다.
+- 플랫폼은 `engines.make(이름, 작업 폴더)`로 엔진을 만들고, `send(글)`이 돌려주는 `TurnResult`만 쓴다. 엔진이 보낸 원래 모양(`raw`)에 기대는 코드는 쓰지 않는다.
+- 새 기능은 플랫폼이 직접 한다. 엔진만이 가진 기능(Kiro 에이전트 설정의 prompt, Claude의 `CLAUDE.md`·스킬·훅, Codex의 `AGENTS.md`·스킬·플러그인·기억)에 기대지 않는다. 그런 곳에 넣은 동작은 엔진을 바꾸면 사라진다.
+- 에이전트에게 무언가를 알려야 하면 플랫폼 안내(`custom_loader.preamble`)에 넣는다. 작업 폴더(`workspace/`)에는 엔진만의 파일(`.kiro/`, `.claude/`, `.codex/`, `AGENTS.md`, `CLAUDE.md`)을 두지 않는다.
+- 엔진의 모양이 다르면 그 엔진의 파일에서 훅을 덮어써 맞추고, 실제로 받은 모양을 `tests/test_tool_request.py`에 더한다. 방법은 README의 "새 엔진 더하기"에 있다.
 
 ## 구조
 
 | 층 | 파일 | 맡는 일 |
 |---|---|---|
-| 엔진 | `acp_client.py` | ACP 클라이언트. 엔진을 샌드박스 홈(`.homes/<이름>/`)으로 실행하고, 안전 모드로 바꾸고, 메시지를 주고받고, 도구 요청을 `ToolRequest`로 맞춘다 |
-| 엔진 | `engines.json` | 엔진마다 실행 명령, 샌드박스 홈, 안전 모드, 로그인 방식 |
-| 엔진 | `workspace/.kiro/agents/engine.json` | Kiro 엔진 설정(쓸 도구, 묻지 않을 도구). 역할 문장은 넣지 않는다 |
+| 엔진 | `engines/base.py` | 공통 통역. 엔진을 샌드박스 홈(`.homes/<이름>/`)으로 실행하고, 안전 모드로 바꾸고, 메시지를 주고받고, `ToolRequest`와 `TurnResult`로 포장한다. 거절 뒤 멈춘 엔진을 이어 가게 한다 |
+| 엔진 | `engines/kiro.py`, `claude.py`, `codex.py` | 엔진 하나씩. 실행 명령, 샌드박스 설정 파일, 안전 모드, 로그인, 그 엔진만의 모양 |
+| 엔진 | `engines/__init__.py` | 엔진 목록(`ENGINES`)과 `make`, `get`, `names` |
 | 플랫폼 | `custom_loader.py` | `custom/`와 `workspace/skills/`를 읽어 잇는다. 에이전트를 읽고 저장한다. 플랫폼 안내(첫 질문 앞에 붙는 글)를 만든다 |
 | 플랫폼 | `dashboard.py` | 대시보드 서버. JSON API만 낸다. 에이전트, 대화와 대화 기록, 허락 카드, 일 실행과 스케줄, 결과함, 로그인 |
 | 플랫폼 | `app/static/` | 대시보드 화면. `dashboard.py`의 API를 부르는 클라이언트다 |
@@ -45,8 +48,9 @@
 
 ## 하지 않을 것
 
-- `engines.json`의 `safe_mode`를 Claude `bypassPermissions`·`acceptEdits`·`auto`, Codex `agent`·`agent-full-access`로 바꾸지 않는다. 모든 도구를 묻지 않고 실행하게 된다. `tests/test_safety.py`가 이를 막는다.
-- Kiro `workspace/.kiro/agents/engine.json`의 `allowedTools`에 `read` 밖의 도구를 넣지 않는다. 허락은 `custom/rules.py`로 정한다.
+- 엔진 파일의 `safe_mode`를 Claude `bypassPermissions`·`acceptEdits`·`auto`, Codex `agent`·`agent-full-access`로 바꾸지 않는다. 모든 도구를 묻지 않고 실행하게 된다. `tests/test_safety.py`가 이를 막는다.
+- Kiro 엔진 설정(`engines/kiro.py`의 `SPEC`)의 `allowedTools`에 `read` 밖의 도구를 넣지 않는다. 허락은 `custom/rules.py`로 정한다.
+- Codex 관리 블록(`engines/codex.py`의 `MANAGED`)에서 웹 검색, Apps, 플러그인, 기억을 다시 켜지 않는다. 허락을 거치지 않는 도구와 엔진만의 기억이 생긴다.
 - Claude의 `settingSources: []`와 Codex의 `project_doc_max_bytes = 0`을 지우지 않는다. 지우면 플랫폼 안의 엔진이 사용자의 전역 설정이나 이 파일을 읽는다.
 - 로그인된 엔진의 로그인을 다시 시작하지 않는다. Codex는 시작하자마자 있던 로그인을 지운다(`GOTCHAS.md`).
 - `.homes/`(로그인 정보), `.env`(시크릿)를 커밋하지 않는다. 시크릿은 코드와 문서에 적지 않고 `.env`에 둔다.

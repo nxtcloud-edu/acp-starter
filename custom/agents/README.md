@@ -13,7 +13,7 @@ skills: memo-to-json
 
 | 칸 | 뜻 | 빼면 |
 |---|---|---|
-| `engine` | 이 에이전트를 돌릴 엔진. `engines.json`의 이름(`kiro`, `claude`, `codex`) | `engines.json`의 첫 엔진 |
+| `engine` | 이 에이전트를 돌릴 엔진. `engines/`의 이름(`kiro`, `claude`, `codex`) | 첫 엔진(`kiro`) |
 | `description` | 화면에 보일 한 줄 설명 | 빈칸 |
 | `skills` | 쓸 스킬. 쉼표로 여럿. `없음`이면 하나도 쓰지 않는다 | 모든 스킬 |
 | 본문 | 이 에이전트의 역할과 규칙. 플랫폼 안내의 "너의 역할"에 들어간다 | 설명을 대신 쓴다 |
@@ -22,7 +22,8 @@ skills: memo-to-json
 
 에이전트를 정하는 것은 이 파일과 `custom/업무.md`, 스킬, 규칙이다. 모두 플랫폼이 엔진에게 보낸다. 그래서 `engine` 한 줄만 바꾸거나 대시보드에서 다른 엔진을 골라 연결해도 같은 에이전트로 일한다.
 
-- 엔진만이 가진 기능(Kiro의 에이전트 파일, Claude의 `CLAUDE.md`와 스킬, Codex의 `AGENTS.md`)에 기대지 않는다. 그런 기능에 넣은 지시는 엔진을 바꾸면 사라진다.
+- 엔진만이 가진 기능(Kiro의 에이전트 설정, Claude의 `CLAUDE.md`와 스킬, Codex의 `AGENTS.md`, 스킬, 플러그인, 기억)에 기대지 않는다. 그런 기능에 넣은 지시는 엔진을 바꾸면 사라진다.
+- 엔진의 답은 플랫폼이 같은 꼴(TurnResult)로 포장해서 화면, 결과 파일, 대화 기록에 쓴다. 엔진이 거절 뒤 멈추면 플랫폼이 이어 가게 한다.
 - 엔진마다 다른 것은 답의 말투와 실력, 쓴 양을 세는 방법, 엔진이 스스로 묻지 않고 하는 일(예: 읽기 전용 명령)이다.
 
 Kiro Crew에서 비슷한 곳: `src/kiro_crew/agent_spec_format.py`(에이전트 파일의 두 형식), `src/kiro_crew/agent.py`
