@@ -189,8 +189,9 @@ class AcpEngine:
         if not cls.status or shutil.which(cls.status[0]) is None:
             return None
         try:
+            # 출력은 UTF-8로 읽는다. 지정하지 않으면 Windows에서는 cp949로 읽어 깨지거나 멈춘다.
             result = subprocess.run([shutil.which(cls.status[0]), *cls.status[1:]], env=cls.sandbox_env(),
-                                    capture_output=True, text=True, timeout=20)
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         except (OSError, subprocess.TimeoutExpired):
             return None
         return cls.logged_in(result.returncode, result.stdout + result.stderr)
@@ -306,6 +307,7 @@ class AcpEngine:
             stderr=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         # 1) 플랫폼이 무엇을 해 줄 수 있는지 알린다. 파일과 터미널은 엔진이 스스로 다룬다.

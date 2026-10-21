@@ -907,6 +907,10 @@ function handle(event) {
     case "preamble":
       if (shown) preambleNote(event);
       break;
+    case "record_error":
+      if (shown) add("note error", event.message);
+      else alertBar(event.message);
+      break;
     case "status":
       if (event.state === "error") finishTurn(event.conversation, false);
       break;

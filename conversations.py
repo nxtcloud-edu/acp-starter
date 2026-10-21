@@ -20,12 +20,14 @@ import pathlib
 import re
 import secrets
 import threading
+import time
 
 ROOT = pathlib.Path(__file__).parent
 FOLDER = ROOT / "conversations"
 ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")   # 만든 때와 무작위 네 글자. 예: 20261021-153012-a1b2
 TITLE_CHARS = 40
 TALK = ("user", "agent")                        # 사람과 에이전트가 나눈 말. 목록의 메시지 수와 앞의 대화에 쓴다
+REPLACE_TRIES = 5                               # 바꿔 넣기를 해 보는 횟수. Windows에서는 다른 프로그램이 파일을 잡으면 잠깐 실패한다
 
 
 class ConversationError(Exception):
@@ -59,7 +61,8 @@ class ConversationStore:
 
     def __init__(self, folder=FOLDER):
         self.folder = pathlib.Path(folder)
-        self.lock = threading.Lock()
+        # 읽기와 쓰기를 같은 잠금 안에서 한다. Windows는 열려 있는 파일을 바꿔 넣지 못하기 때문이다.
+        self.lock = threading.RLock()
 
     def _path(self, conversation_id):
         if not ID.fullmatch(str(conversation_id or "")):
@@ -72,16 +75,24 @@ class ConversationStore:
         temporary = path.with_suffix(".tmp")
         # 다 쓴 뒤에 바꿔 넣는다. 쓰는 도중에 꺼져도 앞의 파일이 깨지지 않는다.
         temporary.write_text(json.dumps(conversation, ensure_ascii=False, indent=1), encoding="utf-8")
-        temporary.replace(path)
+        for attempt in range(REPLACE_TRIES):
+            try:
+                temporary.replace(path)
+                return
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
     def load(self, conversation_id):
         path = self._path(conversation_id)
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            raise ConversationError("그런 대화가 없습니다.")
-        except (OSError, json.JSONDecodeError) as error:
-            raise ConversationError(f"대화 파일을 읽지 못했습니다: {error}", 500)
+        with self.lock:
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                raise ConversationError("그런 대화가 없습니다.")
+            except (OSError, json.JSONDecodeError) as error:
+                raise ConversationError(f"대화 파일을 읽지 못했습니다: {error}", 500)
 
     def create(self, agent, engine):
         now = datetime.datetime.now()
@@ -124,10 +135,11 @@ class ConversationStore:
     def listing(self):
         """대화 목록. 최근에 바뀐 대화가 위에 온다. 읽지 못하는 파일은 건너뛴다."""
         found = []
-        for path in self.folder.glob("*.json") if self.folder.is_dir() else []:
-            try:
-                found.append(summary(json.loads(path.read_text(encoding="utf-8"))))
-            except (OSError, json.JSONDecodeError, KeyError, TypeError):
-                continue
+        with self.lock:
+            for path in self.folder.glob("*.json") if self.folder.is_dir() else []:
+                try:
+                    found.append(summary(json.loads(path.read_text(encoding="utf-8"))))
+                except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                    continue
         found.sort(key=lambda c: (c["updated"], c["id"]), reverse=True)
         return found

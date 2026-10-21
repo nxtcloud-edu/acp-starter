@@ -41,3 +41,11 @@
 - 근본 원인: `CODEX_HOME`을 샌드박스로 바꿔도 Codex는 홈 폴더의 `~/.agents/skills`를 따로 읽는다. 계정 플러그인(`remote_plugin`), 플러그인(`plugins`), Apps(`apps`), 기억(`memories`) 기능이 기본으로 켜져 있다. `skip_host_skill_discovery`(개발 중 기능)를 켜도 개인 스킬은 빠지지 않았다.
 - 해결: `engines/codex.py`가 Codex를 실행할 때 `HOME`을 샌드박스 홈으로 바꾼다(npx 캐시는 원래 자리). 관리 블록에 `features.apps`, `features.plugins`, `features.remote_plugin`, `features.memories`를 `false`로 넣는다. 세션 기록에서 개인 스킬, 계정 플러그인, Apps 도구가 0번 나오는 것을 확인했다. Kiro와 Claude의 기록에는 개인 스킬이 없었다.
 - 교훈: 샌드박스가 깨끗한지는 설정 폴더 하나로 판단하지 않는다. 엔진이 읽는 모든 자리(홈 폴더, 계정, 기능 플래그)를 세션 기록으로 확인한다.
+
+## Windows에서 다르게 도는 세 곳 (2026-10-21, Windows 실기 확인 전)
+
+- 증상(예상): Windows에서 화면의 로그인을 취소하면 "로그인을 멈췄다"가 아니라 "로그인하지 못했다"로 나온다. 엔진의 로그인 상태 명령이 UTF-8 글자를 내면 상태가 "알 수 없음"이 되거나 로그아웃 요청이 답 없이 끊긴다. 다른 프로그램(백신, 검색 색인)이 대화 파일을 열고 있으면 저장이 실패하고, 답을 쓰던 차례가 "답을 쓰는 중"에서 멈춘다.
+- 근본 원인: 강제로 끝낸 프로세스의 종료 코드가 macOS·Linux에서는 음수지만 Windows(`TerminateProcess`)에서는 1이다. 코드는 음수로 "취소"를 판단했다. `subprocess.run(text=True)`는 인코딩을 주지 않으면 시스템 인코딩(한국어 Windows는 cp949)으로 읽는다. Windows는 다른 핸들이 열고 있는 파일을 `os.replace`로 바꿔 넣지 못하고 `PermissionError`를 낸다. 대화 기록 쓰기는 `ConversationError`만 잡아서, 그 밖의 오류가 답을 받는 스레드를 끝냈다.
+- 해결: 로그인을 멈출 때 까닭(`cancelled`, `timeout`)을 따로 표시하고 그 표시로 판단한다. 상태·로그아웃 명령과 엔진의 출력은 `encoding="utf-8", errors="replace"`로 읽는다. 대화 파일은 읽기와 쓰기를 같은 잠금 안에서 하고, 바꿔 넣기가 `PermissionError`면 다섯 번까지 다시 한다. 기록을 쓰지 못하면 `record_error` 사건을 남기고 차례는 끝낸다. 세 가지 모두 macOS에서 그 모양을 흉내 낸 테스트로 재현한 뒤 고쳤다.
+- 교훈: 운영체제마다 다른 값(종료 코드, 기본 인코딩, 파일 잠금)에 기대는 판단은 하지 않는다. 플랫폼이 직접 표시를 남기고, 인코딩은 늘 적는다. Windows에서의 실제 동작은 팀원의 Windows 테스트로 확인한다.
+

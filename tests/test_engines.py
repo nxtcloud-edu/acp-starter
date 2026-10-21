@@ -196,6 +196,12 @@ class EngineHomeTest(unittest.TestCase):
         self.assertTrue((self.root / "claude").is_dir())
         self.assertEqual(CodexEngine.sandbox_env()["INITIAL_AGENT_MODE"], "read-only")
 
+    def test_login_status_output_that_is_not_utf8_is_still_read(self):
+        # Windows의 콘솔 인코딩(cp949)으로는 엔진이 낸 UTF-8 글자를 읽지 못할 수 있다. 바이트가 깨져도 상태는 읽는다.
+        class Odd(ClaudeEngine):
+            status = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xff\\xfe \"loggedIn\": true')"]
+        self.assertIs(Odd.check_login(), True)
+
     def test_kiro_home_gets_engine_spec_and_keeps_other_settings(self):
         settings = self.root / "kiro" / "settings" / "cli.json"
         settings.parent.mkdir(parents=True)

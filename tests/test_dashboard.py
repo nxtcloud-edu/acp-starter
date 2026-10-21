@@ -34,6 +34,8 @@ class TerminalLogin(AcpEngine):
 
 class CodeLogin(AcpEngine):
     name, login, login_mode = "claude", [sys.executable, FAKE_LOGIN, "code"], "code"
+    # UTF-8이 아닌 바이트를 내는 로그아웃 명령. Windows에서는 명령의 출력을 cp949로 읽으면 깨진다.
+    logout = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xff\\xfe bye'); sys.exit(0)"]
 
 
 class DeviceLogin(AcpEngine):
@@ -334,6 +336,21 @@ class DashboardTest(unittest.TestCase):
         status, _ = self.call("POST", "/api/login/claude/code", {"code": "good"})
         self.assertEqual(status, 404)
 
+    def test_cancel_reads_as_cancelled_even_when_the_exit_code_is_1(self):
+        # Windows에서 강제로 끝낸 프로세스의 종료 코드는 음수가 아니라 1이다. 그 모양을 흉내 낸다.
+        self.call("POST", "/api/login/claude")
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "waiting")
+        process = self.platform.logins.running["claude"]
+        process.kill = lambda: (process.stdin.write("끝\n"), process.stdin.flush())   # 가짜 로그인이 1로 끝난다
+        self.assertEqual(self.call("DELETE", "/api/login/claude")[0], 200)
+        final = self.wait_for(lambda e: e["type"] == "login" and e["state"] in ("cancelled", "failed"))
+        self.assertEqual(final["state"], "cancelled")
+
+    def test_logout_output_that_is_not_utf8_still_answers(self):
+        status, _ = self.call("POST", "/api/logout/claude")
+        self.assertEqual(status, 200)
+        self.wait_for(lambda e: e["type"] == "login" and e["state"] == "logged_out")
+
     def test_login_is_refused_when_already_logged_in(self):
         # codex login은 시작하자마자 있던 로그인을 지운다. 취소하면 로그아웃된 상태로 남는다.
         self.logged_in.add("codex")
@@ -512,6 +529,21 @@ class DashboardTest(unittest.TestCase):
         self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
         self.wait_for(lambda e: e["type"] == "done")
         self.assertEqual(self.call("GET", "/api/state")[1]["live"], [])
+
+    def test_platform_keeps_working_when_the_record_cannot_be_saved(self):
+        # Windows에서는 다른 프로그램이 파일을 잡고 있으면 저장이 실패할 수 있다. 그래도 답을 끝내고 다음 질문을 받는다.
+        conversation = self.new_conversation()
+        real_append = self.platform.store.append
+
+        def append(conversation_id, message):
+            if message["role"] == "agent":
+                raise PermissionError(13, "다른 프로그램이 파일을 쓰는 중")
+            return real_append(conversation_id, message)
+
+        with mock.patch.object(self.platform.store, "append", append):
+            self.assertEqual(self.ask(conversation, "하나"), "받음: 하나")
+        self.assertEqual(self.platform.state, "ready")
+        self.assertEqual(self.ask(conversation, "둘"), "받음: 둘")
 
     def test_conversation_continues_after_restart(self):
         conversation = self.new_conversation()

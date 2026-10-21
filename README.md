@@ -236,6 +236,7 @@ notes.md를 읽고, 마감이 있는 일만 날짜 순서로 표로 정리해 �
 | `user`, `text` | 보낸 질문(`text`, `files`), 답의 조각 |
 | `tool`, `permission`, `rule` | 쓴 도구, 허락 요청, 규칙이 정한 허락·거절. `kind`, `label`, `detail` |
 | `permission_result`, `rule_error` | 허락 결과, 규칙 오류 |
+| `record_error` | 대화 기록을 저장하지 못했다. 답은 계속 받는다 |
 | `notice` | 플랫폼 알림. 예: 거절 뒤 멈춘 엔진에게 이어서 하게 했다 |
 | `done` | 차례 끝. `stop`, `stopLabel`, `usage`, `refused`(거절한 도구 수) |
 | `task` | 일의 시작과 끝. `agent`, `engine`, `file`, `deliveryError` |

@@ -126,7 +126,8 @@ class Logins:
         self.env_for = env_for
         self.is_logged_in = is_logged_in
         self.lock = threading.Lock()
-        self.running = {}            # 에이전트 이름 → 로그인 프로세스
+        self.running = {}            # 엔진 이름 → 로그인 프로세스
+        self.stopped = {}            # 엔진 이름 → 플랫폼이 멈춘 까닭("cancelled", "timeout")
 
     def _engine(self, name):
         try:
@@ -157,8 +158,16 @@ class Logins:
         self.log.add(type="login", engine=name, state="started", mode=mode)
         threading.Thread(target=self._watch, args=(name, process, mode), daemon=True).start()
 
+    def _stop(self, name, process, reason):
+        """로그인 프로세스를 멈춘다. 끝난 까닭은 종료 코드가 아니라 이 표시로 판단한다.
+
+        강제로 끝낸 프로세스의 종료 코드는 운영체제마다 다르다(macOS·Linux는 음수, Windows는 1).
+        """
+        self.stopped[name] = reason
+        process.kill()
+
     def _watch(self, name, process, mode):
-        timer = threading.Timer(LOGIN_WAIT_SECONDS, process.kill)
+        timer = threading.Timer(LOGIN_WAIT_SECONDS, self._stop, args=(name, process, "timeout"))
         timer.start()
         url, code, tail = None, None, []
         for line in process.stdout:
@@ -179,12 +188,14 @@ class Logins:
                 stream.close()
             except (OSError, ValueError):
                 pass
+        reason = self.stopped.pop(name, None)
         if process.returncode == 0:
             self.log.add(type="login", engine=name, state="done", mode=mode)
-        elif process.returncode < 0:
+        elif reason == "cancelled" or (reason is None and process.returncode < 0):
             self.log.add(type="login", engine=name, state="cancelled", mode=mode)
         else:
-            self.log.add(type="login", engine=name, state="failed", mode=mode, message=" / ".join(tail))
+            message = f"{LOGIN_WAIT_SECONDS // 60}분 안에 끝나지 않아 멈췄다." if reason == "timeout" else " / ".join(tail)
+            self.log.add(type="login", engine=name, state="failed", mode=mode, message=message)
 
     def code(self, name, code):
         with self.lock:
@@ -205,7 +216,7 @@ class Logins:
             process = self.running.get(name)
         if process is None or process.poll() is not None:
             raise ApiError(404, "진행 중인 로그인이 없습니다.")
-        process.kill()
+        self._stop(name, process, "cancelled")
 
     def logout(self, name):
         engine = self._engine(name)
@@ -216,7 +227,7 @@ class Logins:
         if executable is None:
             raise ApiError(400, f"{command[0]}를 찾지 못했습니다.")
         result = subprocess.run([executable, *command[1:]], env=self.env_for(name, engine),
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         self.log.add(type="login", engine=name, state="logged_out" if result.returncode == 0 else "failed",
                      message=ANSI.sub("", result.stdout + result.stderr).strip()[-300:])
 
@@ -442,11 +453,11 @@ class Platform:
         return client
 
     def _record(self, conversation_id, message):
-        """대화 기록에 메시지를 더한다. 그사이 대화 파일이 없어졌으면 기록하지 않는다."""
+        """대화 기록에 메시지를 더한다. 대화 파일이 없어졌거나 쓰지 못하면 기록을 건너뛰고 계속한다."""
         try:
             self.store.append(conversation_id, message)
-        except ConversationError:
-            pass
+        except (ConversationError, OSError) as error:
+            self.log.add(type="record_error", conversation=conversation_id, message=f"대화 기록을 저장하지 못했다: {error}")
 
     def _event(self, event_type, **fields):
         """대화의 사건. 어느 대화의 것인지 conversation 칸에 적는다."""
