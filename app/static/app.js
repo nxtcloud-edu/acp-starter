@@ -625,6 +625,12 @@ async function renderOutboxDetail() {
   const f = S.files.find((x) => x.name === S.selected.outbox) || S.files[0];
   if (!f) { box.innerHTML = ""; box.appendChild(el("p", "placeholder", "결과 파일이 아직 없다.")); return; }
   S.selected.outbox = f.name;
+  await showFile(box, f, () => S.view === "outbox" && S.selected.outbox === f.name);
+}
+
+// 결과 파일 하나를 box에 그린다. html은 떼어 낸 틀 안에서, 나머지는 글로 보인다.
+// 글을 받는 사이 다른 파일을 고르면 그리지 않는다. still()이 그때도 이 파일을 보는지 알려 준다.
+async function showFile(box, f, still) {
   const head = () => {
     box.innerHTML = "";
     const link = el("a", "", "새 탭에서 열기 ↗");
@@ -643,7 +649,7 @@ async function renderOutboxDetail() {
   }
   let file;
   try { file = await api("GET", `/api/outbox/${encodeURIComponent(f.name)}`); } catch (e) { return report(e); }
-  if (S.view !== "outbox" || S.selected.outbox !== f.name) return;
+  if (!still()) return;
   head();
   box.append(el("pre", "", file.text));
 }
