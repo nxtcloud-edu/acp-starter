@@ -139,7 +139,7 @@ async function loadBrand() {
 
 // ---- 엔진 세션의 상태 ----
 
-const STATE = { idle: "연결하지 않음", starting: "연결하는 중", ready: "준비됨", busy: "답을 쓰는 중", error: "오류" };
+const STATE = { idle: "대기 중", starting: "연결하는 중", ready: "준비됨", busy: "답을 쓰는 중", error: "오류" };
 
 // 서버가 알려 준 엔진 세션(state, agent, engine, conversation)을 화면에 옮긴다.
 function updateStatus(data) {
