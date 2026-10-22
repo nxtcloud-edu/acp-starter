@@ -29,7 +29,7 @@
     <main>
       <div id="banner" class="banner" hidden></div>
 
-      <!-- 대화: 왼쪽은 대화 목록, 오른쪽은 고른 대화. 대화마다 에이전트 하나와 이야기한다 -->
+      <!-- 대화: 왼쪽은 대화 목록, 가운데는 고른 대화, 오른쪽은 그 대화의 결과. 대화마다 에이전트 하나와 이야기한다 -->
       <section id="view-chat" class="view">
         <div class="view-head">
           <div>
@@ -38,7 +38,7 @@
           </div>
           <div class="head-actions"><button type="button" id="new-chat">+ 새 대화</button></div>
         </div>
-        <div class="split">
+        <div id="chat-split" class="split chat-split">
           <ul id="chat-list" class="pick-list"></ul>
           <div class="chat">
             <div id="chat-head" class="chat-head"></div>
@@ -55,6 +55,14 @@
               </div>
             </form>
           </div>
+          <!-- 이 대화의 결과: 대화를 연 뒤 workspace/outbox/에 생기거나 바뀐 파일. 차례가 끝나면 가장 새것을 보인다 -->
+          <aside id="results" class="results">
+            <div class="results-head">
+              <b>이 대화의 결과</b>
+              <select id="result-pick" hidden></select>
+            </div>
+            <div id="result-detail" class="detail"></div>
+          </aside>
         </div>
       </section>
 

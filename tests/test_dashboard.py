@@ -299,6 +299,18 @@ class DashboardTest(unittest.TestCase):
         status, _ = self.call("GET", "/outbox/" + urllib.request.quote("비밀.sh"))
         self.assertEqual(status, 404)
 
+    def test_outbox_tells_when_each_file_changed(self):
+        # 대화 화면은 대화를 연 때부터 마지막 메시지까지 바뀐 파일만 그 대화의 결과로 보인다. 시각은 대화 기록과 같은 꼴이다.
+        outbox = self.root / "workspace" / "outbox"
+        outbox.mkdir()
+        (outbox / "옛것.md").write_text("옛", encoding="utf-8")
+        os.utime(outbox / "옛것.md", (0, datetime.datetime(2026, 10, 1, 9, 0).timestamp()))
+        (outbox / "새것.md").write_text("새", encoding="utf-8")
+        status, body = self.call("GET", "/api/outbox")
+        self.assertEqual([f["name"] for f in body["files"]], ["새것.md", "옛것.md"])
+        self.assertEqual(body["files"][1]["modified"], "2026-10-01 09:00:00.000")
+        self.assertGreater(body["files"][0]["modified"], body["files"][1]["modified"])
+
     # ---- 로그인 ----
 
     def login_events(self, agent):

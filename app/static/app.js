@@ -4,7 +4,7 @@
 //
 // 왼쪽 메뉴(대화, 에이전트, 스킬, 일, 결과함)를 고르면 오른쪽에 그 화면이 나온다.
 // 모든 화면이 "목록 + 상세" 꼴이다. 목록에서 고르면 상세가 바뀐다.
-// 대화의 목록은 대화들이고, 상세는 고른 대화의 기록과 입력칸이다.
+// 대화의 목록은 대화들이고, 상세는 고른 대화의 기록과 입력칸이다. 그 오른쪽에 그 대화의 결과 파일이 보인다.
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,7 +25,9 @@ const S = {
   login: {},             // 엔진 이름 → 마지막 로그인 사건
   editing: null,         // 에이전트 양식: null, {mode: "new"}, {mode: "edit", name}
   pending: new Set(),    // 답을 기다리는 허락 요청 번호
+  results: { open: true, pick: null, shown: null },   // 대화 오른쪽의 결과: 열림, 고른 파일, 지금 그린 파일
 };
+try { S.results.open = localStorage.getItem("results-open") !== "no"; } catch (e) { /* 못 읽으면 연다 */ }
 let last = 0;            // 마지막으로 받은 사건 번호
 let epoch = null;        // 서버를 켤 때마다 바뀌는 값. 바뀌면 처음부터 다시 읽는다
 let answer = null;       // 지금 쓰는 중인 에이전트의 답 칸
@@ -99,7 +101,7 @@ $("status-pill").onclick = () => goToRunning();
 // 고른 메뉴의 화면을 다시 그린다. 대화의 기록 칸은 다시 그리지 않는다.
 // 기록 칸은 사건이 올 때마다 이어 그리고, 대화를 바꿀 때만 renderChat()으로 처음부터 그린다.
 function render() {
-  if (S.view === "chat") { renderChatList(); renderChatHead(); renderComposer(); }
+  if (S.view === "chat") { renderChatList(); renderChatHead(); renderComposer(); renderResults(); }
   if (S.view === "agents") { renderAgentList(); renderAgentDetail(); }
   if (S.view === "skills") { renderSkillList(); renderSkillDetail(); }
   if (S.view === "tasks") { renderTaskList(); renderTaskDetail(); }
@@ -178,6 +180,7 @@ async function selectConversation(id) {
   S.convData = null;
   S.draft = null;
   S.confirmDelete = false;
+  S.results.pick = null;
   renderChat();
   let data;
   try { data = await api("GET", `/api/conversations/${id}`); }
@@ -193,7 +196,7 @@ async function goToRunning() {
   showView("chat");
 }
 
-function renderChat() { renderChatList(); renderChatHead(); renderLog(); renderComposer(); }
+function renderChat() { renderChatList(); renderChatHead(); renderLog(); renderComposer(); renderResults(); }
 
 function renderChatList() {
   const list = $("chat-list");
@@ -232,6 +235,7 @@ function renderChatHead() {
   left.append(el("h2", "", c ? (listed && listed.title) || c.title || "제목 없음" : "새 대화"),
               el("p", "muted", `에이전트 ${who.agent} · 엔진 ${who.engine}${running}`));
   const actions = el("div", "head-actions");
+  actions.append(button(S.results.open ? "결과 닫기" : "결과 보기", toggleResults, "ghost"));
   actions.append(button("에이전트·엔진 바꾸기", () => {
     S.selected.agents = who.agent;
     S.chosenEngine[who.agent] = who.engine;
@@ -656,6 +660,54 @@ async function showFile(box, f, still) {
 
 $("reload-outbox").onclick = () => refresh(loadOutbox);
 
+// ---- 대화 오른쪽의 결과 ----
+
+// 이 대화를 연 때부터 마지막 메시지까지 결과함에 생기거나 바뀐 파일. 새것이 앞에 온다.
+// 마지막 메시지 뒤에 일(tasks/)이 만든 파일은 넣지 않는다. 답을 쓰는 중에 생긴 파일은 차례가 끝나면 들어온다.
+function conversationFiles() {
+  const c = S.convData;
+  if (!c) return [];
+  return S.files.filter((f) => f.modified >= c.created && f.modified <= c.updated);
+}
+
+function toggleResults() {
+  S.results.open = !S.results.open;
+  try { localStorage.setItem("results-open", S.results.open ? "yes" : "no"); } catch (e) { /* 다음에 다시 연다 */ }
+  renderChatHead();
+  renderResults();
+}
+
+// 고른 파일이 없으면 가장 새것을 보인다. 그린 파일이 그대로이면 다시 그리지 않는다(html 틀이 깜빡이지 않게).
+function renderResults() {
+  $("chat-split").classList.toggle("no-results", !S.results.open);
+  if (!S.results.open) { S.results.shown = null; return; }
+  const files = conversationFiles();
+  const f = files.find((x) => x.name === S.results.pick) || files[0];
+  const pick = $("result-pick");
+  pick.hidden = files.length < 2;
+  pick.innerHTML = "";
+  for (const x of files) {
+    const option = el("option", "", `${x.name} · ${shortTime(x.modified)}`);
+    option.value = x.name;
+    option.selected = f && x.name === f.name;
+    pick.appendChild(option);
+  }
+  const key = f ? `${f.name}|${f.modified}` : `없음|${S.conv}`;
+  if (key === S.results.shown) return;
+  S.results.shown = key;
+  const box = $("result-detail");
+  if (!f) {
+    box.innerHTML = "";
+    box.appendChild(el("p", "placeholder", S.conv
+      ? "이 대화에서 만든 결과 파일이 아직 없다. 에이전트가 workspace/outbox/에 파일을 만들면 여기에 보인다."
+      : "첫 질문을 보내면 이 대화의 결과가 여기에 보인다."));
+    return;
+  }
+  showFile(box, f, () => S.results.shown === key);
+}
+
+$("result-pick").onchange = (event) => { S.results.pick = event.target.value; renderResults(); };
+
 // ---- 대화 기록 칸 ----
 
 function scrollDown() { $("log").scrollTop = $("log").scrollHeight; }
@@ -889,6 +941,7 @@ async function finishTurn(id, silent) {
   S.convData = data;
   if (!silent) renderLog();
   renderChatHead();
+  renderResults();
 }
 
 // ---- 서버의 사건을 화면에 옮긴다 ----
@@ -924,6 +977,7 @@ function handle(event) {
       if (shown) add("note", `${event.stopLabel} · ${event.usage}`);
       answer = null;
       finishTurn(event.conversation, true);
+      if (event.conversation === S.conv) S.results.pick = null;   // 차례가 끝나면 가장 새 결과를 보인다
       refresh(loadOutbox);
       break;
     case "task":

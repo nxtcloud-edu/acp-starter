@@ -72,6 +72,11 @@ def clean_name(name):
     return name[:120] or "file"
 
 
+def _stamp(seconds):
+    """파일 시각을 대화 기록의 시각과 같은 꼴로 쓴다. 예: 2026-10-21 15:30:12.345"""
+    return datetime.datetime.fromtimestamp(seconds).isoformat(sep=" ", timespec="milliseconds")
+
+
 def file_info(path):
     """올린 파일 하나의 정보. path는 작업 폴더 기준 경로다."""
     return {"name": path.name, "path": f"inbox/{path.name}", "url": f"/inbox/{path.name}",
@@ -605,12 +610,14 @@ class Platform:
     # ---- 결과함 ----
 
     def outbox(self):
-        """결과 파일 목록. 새로 바뀐 파일이 위에 온다."""
+        """결과 파일 목록. 새로 바뀐 파일이 위에 온다.
+        modified는 대화 기록의 시각과 같은 꼴이다. 화면은 이 값으로 대화를 연 뒤에 생긴 파일을 고른다."""
         folder = self.workspace / "outbox"
         files = [p for p in folder.iterdir() if p.is_file() and p.suffix in OUTBOX_TYPES] \
             if folder.exists() else []
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return {"files": [{"name": p.name, "type": p.suffix[1:], "url": f"/outbox/{p.name}"} for p in files]}
+        return {"files": [{"name": p.name, "type": p.suffix[1:], "url": f"/outbox/{p.name}",
+                           "modified": _stamp(p.stat().st_mtime)} for p in files]}
 
     def outbox_path(self, name):
         path = self.workspace / "outbox" / name

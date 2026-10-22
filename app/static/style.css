@@ -139,6 +139,22 @@ details.msg { cursor: pointer; }
 /* 결과함 미리 보기 */
 .viewer { width: 100%; height: calc(100% - 60px); min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-top: 10px; }
 
+/* 대화 오른쪽의 결과: 대화 목록, 대화, 결과의 세 칸. 결과를 닫으면 두 칸으로 돌아간다 */
+.chat-split { grid-template-columns: 240px minmax(360px, 1fr) minmax(320px, 42%); }
+.chat-split.no-results { grid-template-columns: 280px 1fr; }
+.chat-split.no-results .results { display: none; }
+.results { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--line); background: var(--panel); }
+.results-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.results-head select { min-width: 0; max-width: 70%; font-size: 13px; }
+.results .detail { flex: 1; display: flex; flex-direction: column; padding: 14px 16px 18px; }
+.results .detail h2 { font-size: 14px; overflow-wrap: anywhere; }
+.results .viewer { flex: 1; height: auto; min-height: 300px; }
+.results .placeholder { padding: 30px 10px; }
+
+@media (max-width: 1180px) {
+  .chat-split { grid-template-columns: 190px minmax(300px, 1fr) minmax(280px, 40%); }
+}
+
 @media (max-width: 860px) {
   .frame { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px; }
@@ -146,6 +162,8 @@ details.msg { cursor: pointer; }
   .split { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .pick-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; }
   #chat-list { max-height: 24vh; }
+  .chat-split, .chat-split.no-results { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+  .results { border-left: 0; border-top: 1px solid var(--line); max-height: 45vh; }
   .chat-head { padding: 10px 14px; }
   #log { padding: 14px; }
   #composer { padding: 8px 14px 10px; }
