@@ -1,8 +1,9 @@
-workspace/outbox/
-workspace/inbox/
 __pycache__/
 .env
 .env.*
 .DS_Store
 .homes/
 conversations/
+# 엔진이 작업 폴더에 만든 파일. 남기고 싶은 폴더가 생기면 여기서 뺀다.
+workspace/*
+!workspace/.gitkeep

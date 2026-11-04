@@ -4,44 +4,36 @@
       python dashboard.py --no-browser   (브라우저를 열지 않는다)
 
 서버는 JSON API만 낸다. 화면(app/static/)은 그 API를 부르는 클라이언트다.
-API의 목록은 README의 '대시보드 API' 절에 있다.
-대시보드가 켜져 있는 동안 tasks/의 일을 정해진 시각에 돌린다.
-custom/의 파일(이름과 색, 업무, 허락 규칙, 결과 보내기)은 custom_loader.py가 읽어 잇는다.
+하는 일: 엔진 목록과 로그인, 엔진 연결(한 번에 하나), 대화 하나, 허락 카드.
+custom/의 파일(이름과 색, 업무, 허락 규칙)은 custom_loader.py가 읽어 잇는다.
 대화 기록은 conversations.py가 conversations/에 파일로 남긴다.
 """
 
 import datetime
 import json
-import mimetypes
 import pathlib
 import re
 import secrets
 import shutil
-import sys
 import subprocess
+import sys
 import threading
-import unicodedata
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 import custom_loader
 import engines
-import runner
 from conversations import ConversationError, ConversationStore
 from engines import EngineError
 
 ROOT = pathlib.Path(__file__).parent
 STATIC = ROOT / "app" / "static"
+STATIC_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
 HOST, PORT = "127.0.0.1", 8765
 PERMISSION_WAIT_SECONDS = 300
-SCHEDULER_SECONDS = 20
 LOGIN_WAIT_SECONDS = 900
-SAFE_NAME = re.compile(r"[\w가-힣.\-]+")
-OUTBOX_TYPES = {".md": "text/markdown", ".json": "application/json", ".html": "text/html",
-                ".txt": "text/plain", ".csv": "text/csv"}
-UPLOAD_BYTES = 20 * 1024 * 1024   # 올리는 파일 하나의 크기 상한
-MAX_FILES = 10                    # 질문 하나에 붙이는 파일 수의 상한
+SAFE_NAME = re.compile(r"[\w.\-]+")
 # 로그인 명령의 출력에서 색과 링크 표시(ANSI 이스케이프)를 지우고 주소와 기기 코드를 찾는다.
 ANSI = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]")
 URL = re.compile(r"https://[^\s\x07\x1b]+")
@@ -59,32 +51,8 @@ def check_login(name):
     return engines.get(name).check_login()
 
 
-def clean_name(name):
-    """올린 파일의 이름을 작업 폴더에 둘 수 있는 이름으로 바꾼다. 폴더는 떼고, 쓸 수 없는 글자는 _로 바꾼다.
-
-    macOS가 한글 이름을 풀어 쓴 꼴(NFD)로 보내도 붙여 쓴 꼴(NFC)로 맞춘다. 에이전트가 경로를 같게 쓰게 하려는 것이다.
-    """
-    name = unicodedata.normalize("NFC", re.split(r"[\\/]", str(name or ""))[-1])
-    name = re.sub(r"[^\w.\-]+", "_", name).lstrip(".")
-    stem, dot, suffix = name.rpartition(".")
-    if dot and stem:
-        name = f"{stem[:100]}.{suffix[:10]}"
-    return name[:120] or "file"
-
-
-def _stamp(seconds):
-    """파일 시각을 대화 기록의 시각과 같은 꼴로 쓴다. 예: 2026-10-21 15:30:12.345"""
-    return datetime.datetime.fromtimestamp(seconds).isoformat(sep=" ", timespec="milliseconds")
-
-
-def file_info(path):
-    """올린 파일 하나의 정보. path는 작업 폴더 기준 경로다."""
-    return {"name": path.name, "path": f"inbox/{path.name}", "url": f"/inbox/{path.name}",
-            "type": mimetypes.guess_type(path.name)[0] or "application/octet-stream", "size": path.stat().st_size}
-
-
 def tool_line(request):
-    """대화 기록에 남길 도구 한 줄. 예: "명령 실행 python3 skills/memo-to-json/scripts/save_memo.py"."""
+    """대화 기록에 남길 도구 한 줄. 예: "명령 실행 ls"."""
     first = request.detail.splitlines()[0][:200] if request.detail else ""
     return f"{request.label} {first}".strip()
 
@@ -238,16 +206,15 @@ class Logins:
 
 
 class Platform:
-    """에이전트, 대화, 일 목록, 스케줄, 결과함, 로그인을 맡는다.
+    """엔진 연결, 대화 하나, 허락 카드, 로그인을 맡는다.
 
-    에이전트(custom/agents/)는 플랫폼이 정하고, 엔진(engines/)은 그 에이전트를 돌리는 부품이다.
     이 클래스는 엔진 이름을 몰라도 된다. 엔진마다 다른 것은 engines/가 맡는다.
+    대화는 하나다(conversations.py의 가장 새 대화). 엔진을 바꾸면 플랫폼이 앞의 대화를 새 엔진에 넘긴다.
     """
 
     def __init__(self, root=ROOT, client_factory=engines.make, status_checker=check_login,
                  install_checker=lambda engine: engine.installed(), logins=None):
         self.workspace = pathlib.Path(root) / "workspace"
-        self.tasks_dir = pathlib.Path(root) / "tasks"
         self.custom = pathlib.Path(root) / "custom"
         self.store = ConversationStore(pathlib.Path(root) / "conversations")
         self.client_factory = client_factory
@@ -256,263 +223,242 @@ class Platform:
         self.log = EventLog()
         self.logins = logins or Logins(self.log)
         self.lock = threading.Lock()
-        # 엔진 세션은 한 번에 하나만 열어 둔다. 아래 넷은 그 세션의 것이다.
+        # 엔진 세션은 한 번에 하나만 열어 둔다. 아래는 그 세션의 것이다.
         self.client = None
-        self.conversation_id = None  # 세션을 연 대화
-        self.agent = None            # 그 대화의 에이전트
-        self.engine = None           # 그 에이전트를 돌리는 엔진
+        self.engine = None           # 열어 둔 세션의 엔진
         self.state = "idle"          # idle, starting, ready, busy, error
         self.partial = []            # 지금 차례에 받은 답 조각. 엔진이 중간에 끝나도 남기려고 모은다
         self.pending = {}            # 허락을 기다리는 요청: 번호 → {event, allow}
         self.next_permission = 0
-        self.last_run = {}           # 스케줄 판단용: 일 이름 → 오늘 돌렸거나 건너뛴 날짜
-        self.ran_at = {}             # 화면 표시용: 일 이름 → 실제로 돌린 시각
-        # 켜기 전에 이미 지난 오늘의 일은 돌리지 않는다. 놓친 실행을 몰아서 하지 않는다.
-        now = datetime.datetime.now()
-        for task in runner.load_tasks(self.tasks_dir):
-            if task["time"] and now.strftime("%H:%M") >= task["time"]:
-                self.last_run[task["name"]] = now.date()
 
     # ---- 엔진 ----
 
     def engines(self):
         configs = {name: engines.get(name) for name in engines.names()}
-        names = list(configs)
         results = {}
 
         def check(name):
             results[name] = self.status_checker(name) if self.install_checker(configs[name]) else None
 
-        threads = [threading.Thread(target=check, args=(name,)) for name in names]
+        threads = [threading.Thread(target=check, args=(name,)) for name in configs]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join()
         return {"engines": [{"name": name,
-                             "installed": self.install_checker(configs[name]),
+                             "installed": self.install_checker(config),
                              "loggedIn": results.get(name),
-                             "loginMode": configs[name].login_mode,
-                             "loginCommand": " ".join(configs[name].login),
-                             "canLogout": bool(configs[name].logout)} for name in names]}
+                             "loginMode": config.login_mode,
+                             "loginCommand": " ".join(config.login),
+                             "canLogout": bool(config.logout)} for name, config in configs.items()]}
 
-    # ---- 에이전트 ----
-
-    def agents(self):
-        return {"agents": custom_loader.agents(self.custom), "current": self.agent, "engine": self.engine,
-                "state": self.state}
-
-    def save_agent(self, body, create):
+    def _known_engine(self, name):
         try:
-            return custom_loader.save_agent(body, self.custom, self.workspace, create=create)
-        except custom_loader.AgentError as error:
-            raise ApiError(error.status, str(error))
-
-    def _agent_and_engine(self, agent, engine=None):
-        """에이전트를 읽고 돌릴 엔진을 정한다. engine을 주면 에이전트 파일의 engine 대신 그 엔진으로 돌린다."""
-        try:
-            definition = custom_loader.agent(agent, self.custom)
-            engine = engine or definition["engine"]
-            engines.get(engine)
-        except custom_loader.AgentError as error:
-            raise ApiError(error.status, str(error))
+            engines.get(name)
         except EngineError as error:
             raise ApiError(400, str(error))
-        return definition, engine
+        return name
 
-    # ---- 대화 ----
-    #
-    # 대화 하나는 conversations/<번호>.json 하나다(conversations.py). 대화마다 에이전트 하나와 이야기한다.
-    # 질문을 받은 대화가 지금 열어 둔 엔진 세션의 대화가 아니거나 엔진이 바뀌었으면 세션을 새로 연다.
-    # 새 세션의 첫 질문 앞에는 플랫폼 안내를 붙이고, 그 안내에 그 대화의 앞부분을 넣는다.
-    # 그래서 대화를 바꿔도, 엔진을 바꿔도, 대시보드를 다시 켜도 대화가 이어진다.
-
-    def conversations(self):
-        return {"conversations": self.store.listing()}
-
-    def conversation(self, conversation_id):
-        try:
-            return self.store.load(conversation_id)
-        except ConversationError as error:
-            raise ApiError(error.status, str(error))
-
-    def create_conversation(self, agent, engine=None):
-        definition, engine = self._agent_and_engine(str(agent or ""), engine or None)
-        return self.store.create(definition["name"], engine)
-
-    def _running(self, conversation_id):
-        """그 대화가 답을 쓰는 중인지 본다. self.lock 안에서 부른다."""
-        return self.conversation_id == conversation_id and self.state in ("starting", "busy")
+    def _busy(self):
+        """답을 쓰거나 연결하는 중인지 본다. self.lock 안에서 부른다."""
+        return self.state in ("starting", "busy")
 
     def _detach(self):
         """열어 둔 엔진 세션을 떼어 낸다. self.lock 안에서 부르고, 돌려받은 세션은 lock 밖에서 닫는다."""
         old, self.client = self.client, None
-        self.conversation_id, self.agent, self.engine, self.state = None, None, None, "idle"
+        self.engine, self.state = None, "idle"
         return old
 
-    def change_engine(self, conversation_id, engine):
-        """대화의 엔진을 바꾼다. 다음 질문에서 새 엔진의 세션을 열고 지금까지의 대화를 넘긴다."""
-        conversation = self.conversation(conversation_id)
-        if not engine:
-            raise ApiError(400, "바꿀 엔진이 없습니다.")
-        _, engine = self._agent_and_engine(conversation["agent"], str(engine))
-        if engine == conversation["engine"]:
-            return conversation
-        with self.lock:
-            if self._running(conversation_id):
-                raise ApiError(409, "이 대화의 답을 쓰는 중입니다. 끝난 뒤에 엔진을 바꿉니다.")
-            old = self._detach() if self.conversation_id == conversation_id else None
-        if old:
-            old.close()
-        note = (f"엔진을 {conversation['engine']}에서 {engine}로 바꿨다. "
-                "다음 질문을 보낼 때 지금까지의 대화를 플랫폼 안내에 넣어 이어 간다.")
+    # ---- 대화 ----
+
+    def conversation(self):
+        """지금 대화. 하나도 없으면 첫 엔진으로 새로 만든다."""
         try:
-            return self.store.change_engine(conversation_id, engine, note)
+            return self.store.current(engines.names()[0])
         except ConversationError as error:
             raise ApiError(error.status, str(error))
 
-    def delete_conversation(self, conversation_id):
+    def new_conversation(self):
+        """새 대화를 시작한다. 앞의 대화 파일은 지우지 않고 남긴다.
+
+        엔진 세션도 닫는다. 엔진의 기억에 앞의 대화가 남아 있기 때문이다. 엔진은 앞의 대화와 같은 것을 쓴다.
+        """
+        current = self.conversation()
         with self.lock:
-            if self._running(conversation_id):
-                raise ApiError(409, "이 대화의 답을 쓰는 중입니다. 끝난 뒤에 지웁니다.")
-            try:
-                self.store.delete(conversation_id)
-            except ConversationError as error:
-                raise ApiError(error.status, str(error))
-            old = self._detach() if self.conversation_id == conversation_id else None
+            if self._busy():
+                raise ApiError(409, "답을 쓰는 중입니다. 끝난 뒤에 새 대화를 시작합니다.")
+            old = self._detach()
         if old:
             old.close()
+        fresh = current if not current["messages"] else self.store.create(current["engine"])
+        self.log.add(type="conversation", id=fresh["id"])
+        self._status()
+        return fresh
 
-    def prompt(self, conversation_id, text, files=None):
-        """대화에 질문을 보낸다. 답은 사건으로 오고, 끝나면 대화 기록에 남는다.
+    def connect(self, engine):
+        """엔진 세션을 연다. 대화의 엔진과 다르면 대화의 엔진을 바꾸고, 앞의 대화를 플랫폼 안내에 넣어 넘긴다."""
+        engine = self._known_engine(str(engine or ""))
+        conversation = self.conversation()
+        with self.lock:
+            if self._busy():
+                raise ApiError(409, "답을 쓰거나 연결하는 중입니다. 끝난 뒤에 연결합니다.")
+            old = self._detach()
+            self.engine, self.state = engine, "starting"
+        if old:
+            old.close()
+        if engine != conversation["engine"]:
+            note = (f"엔진을 {conversation['engine']}에서 {engine}로 바꿨다. "
+                    "지금까지의 대화를 플랫폼 안내에 넣어 이어 간다.")
+            try:
+                conversation = self.store.change_engine(conversation["id"], engine, note)
+            except (ConversationError, OSError) as error:
+                self.log.add(type="record_error", message=f"대화 기록을 저장하지 못했다: {error}")
+            self.log.add(type="note", text=note)
+        self._status()
+        threading.Thread(target=self._connect, args=(conversation, engine), daemon=True).start()
 
-        files: 올린 파일의 작업 폴더 기준 경로(inbox/<이름>). 엔진 층이 그 엔진에 맞는 꼴로 보낸다.
+    def _connect(self, conversation, engine):
+        try:
+            self._open(conversation["id"], engine, conversation["messages"])
+        except Exception as error:  # 엔진 오류든 코드의 버그든 기록하고, 다시 연결할 수 있게 한다
+            return self._fail(conversation["id"], error)
+        with self.lock:
+            self.state = "ready"
+        self._status()
+
+    def prompt(self, text):
+        """지금 대화에 질문을 보낸다. 답은 사건으로 오고, 끝나면 대화 기록에 남는다.
+
+        연결한 세션이 없으면 대화의 엔진으로 세션을 새로 연다.
         """
         text = str(text or "").strip()
-        files = self._attachments(files)
-        if not text and not files:
+        if not text:
             raise ApiError(400, "보낼 내용이 없습니다.")
-        conversation = self.conversation(conversation_id)
-        definition, engine = self._agent_and_engine(conversation["agent"], conversation["engine"])
+        conversation = self.conversation()
+        engine = self._known_engine(conversation["engine"])
         with self.lock:
-            if self.state in ("starting", "busy"):
-                raise ApiError(409, "다른 질문의 답을 쓰는 중입니다. 끝난 뒤에 보냅니다.")
-            reuse = (self.client is not None and self.state == "ready"
-                     and (self.conversation_id, self.engine) == (conversation_id, engine))
+            if self._busy():
+                raise ApiError(409, "답을 쓰거나 연결하는 중입니다. 끝난 뒤에 보냅니다.")
+            reuse = self.client is not None and self.state == "ready" and self.engine == engine
             old = None if reuse else self._detach()
-            self.conversation_id, self.agent, self.engine = conversation_id, definition["name"], engine
-            self.state = "busy" if reuse else "starting"
-            self.partial = []
+            self.engine, self.state, self.partial = engine, "busy" if reuse else "starting", []
         if old:
             old.close()
-        self._record(conversation_id, {"role": "user", "text": text, **({"files": files} if files else {})})
-        self._event("user", text=text, files=files)
-        self._event("status", state=self.state, agent=self.agent, engine=engine)
+        history = conversation["messages"]
+        self._record(conversation["id"], {"role": "user", "text": text})
+        self.log.add(type="user", text=text)
+        self._status()
         threading.Thread(target=self._turn, daemon=True,
-                         args=(conversation_id, definition, engine, conversation["messages"], text, files, reuse)).start()
+                         args=(conversation["id"], engine, history, text, reuse)).start()
 
-    def _turn(self, conversation_id, definition, engine, history, text, files, reuse):
+    def _turn(self, conversation_id, engine, history, text, reuse):
         """질문 하나를 엔진에 보낸다. 엔진이 어떤 꼴로 답하든 하나의 형식(TurnResult)으로 받아 기록과 화면에 쓴다."""
-        client, result, error = self.client if reuse else None, None, None
         try:
-            if client is None:
-                client = self._open(conversation_id, definition, engine, history)
-            result = client.send(custom_loader.with_files(text, files), [self.workspace / path for path in files])
-        except Exception as failure:  # 엔진 오류든 코드의 버그든 기록하고, 다음 질문을 받을 수 있게 한다
-            error = failure
-        if result is not None:
-            self._record(conversation_id, {
-                "role": "agent", "text": result.text, "engine": engine, "stop": result.stop,
-                "stopLabel": result.stop_label, "usage": result.usage_text,
-                "tools": [tool_line(t) for t in result.tools], "refused": [tool_line(t) for t in result.refused],
-                "notices": result.notices})
-        else:
+            client = self.client if reuse else self._open(conversation_id, engine, history)
+            if not reuse:
+                with self.lock:
+                    self.state = "busy"
+                self._status()
+            result = client.send(text)
+        except Exception as error:  # 엔진 오류든 코드의 버그든 기록하고, 다음 질문을 받을 수 있게 한다
             partial = "".join(self.partial).strip()
             if partial:
                 self._record(conversation_id, {"role": "agent", "text": partial, "engine": engine,
                                                "stop": "error", "stopLabel": "오류로 멈춤"})
-            self._record(conversation_id, {"role": "note", "text": f"오류: {error}", "error": True})
+            return self._fail(conversation_id, error)
+        self._record(conversation_id, {
+            "role": "agent", "text": result.text, "engine": engine, "stop": result.stop,
+            "stopLabel": result.stop_label, "usage": result.usage_text,
+            "tools": [tool_line(t) for t in result.tools], "refused": [tool_line(t) for t in result.refused],
+            "notices": result.notices})
         with self.lock:
-            self.state = "ready" if result is not None else "error"
-        if result is not None:
-            self._event("done", stop=result.stop, stopLabel=result.stop_label, usage=result.usage_text,
-                        refused=len(result.refused))
-        else:
-            self._event("status", state="error", agent=definition["name"], engine=engine, message=str(error))
+            self.state = "ready"
+        self.log.add(type="done", stop=result.stop, stopLabel=result.stop_label, usage=result.usage_text,
+                     refused=len(result.refused))
+        self._status()
 
-    def _open(self, conversation_id, definition, engine, history):
-        """엔진 세션을 새로 연다. 첫 질문에 붙일 플랫폼 안내에 그 대화의 앞부분(history)을 넣는다."""
-        preamble = custom_loader.preamble(self.workspace, self.custom, definition, history)
+    def _open(self, conversation_id, engine, history):
+        """엔진 세션을 새로 연다. 첫 질문에 붙일 플랫폼 안내에 앞의 대화(history)를 넣는다."""
+        preamble = custom_loader.preamble(self.custom, history)
         client = self.client_factory(engine, self.workspace, on_text=self._on_text, on_tool=self._on_tool,
                                      on_permission=self._ask, on_notice=self._on_notice, preamble=preamble)
         try:
             client.start()
-        except EngineError:
+        except Exception:
             client.close()
             raise
         with self.lock:
-            self.client, self.state = client, "busy"
+            self.client = client
         carried = len(custom_loader.history_lines(history))
         self._record(conversation_id, {"role": "preamble", "text": preamble, "engine": engine, "history": carried})
-        self._event("status", state="busy", agent=definition["name"], engine=engine)
-        self._event("preamble", agent=definition["name"], engine=engine, text=preamble, history=carried)
+        self.log.add(type="preamble", engine=engine, text=preamble, history=carried)
         return client
+
+    def _fail(self, conversation_id, error):
+        self._record(conversation_id, {"role": "note", "text": f"오류: {error}", "error": True})
+        with self.lock:
+            self.state = "error"
+        self._status(message=str(error))
 
     def _record(self, conversation_id, message):
         """대화 기록에 메시지를 더한다. 대화 파일이 없어졌거나 쓰지 못하면 기록을 건너뛰고 계속한다."""
         try:
             self.store.append(conversation_id, message)
         except (ConversationError, OSError) as error:
-            self.log.add(type="record_error", conversation=conversation_id, message=f"대화 기록을 저장하지 못했다: {error}")
+            self.log.add(type="record_error", message=f"대화 기록을 저장하지 못했다: {error}")
 
-    def _event(self, event_type, **fields):
-        """대화의 사건. 어느 대화의 것인지 conversation 칸에 적는다."""
-        return self.log.add(type=event_type, conversation=self.conversation_id, **fields)
+    def _status(self, **fields):
+        with self.lock:
+            state, engine = self.state, self.engine
+        self.log.add(type="status", state=state, engine=engine, **fields)
 
     def snapshot(self):
-        """지금 엔진 세션과 진행 중인 차례의 사건. 화면이 처음 열릴 때 부른다."""
+        """지금 엔진 세션, 대화, 진행 중인 차례의 사건. 화면이 처음 열릴 때 부른다."""
         with self.lock:
-            state, conversation_id, agent, engine = self.state, self.conversation_id, self.agent, self.engine
+            state, engine = self.state, self.engine
         with self.log.cond:
             events = list(self.log.events)
         live = []
         if state in ("starting", "busy"):
-            asked = [i for i, e in enumerate(events) if e["type"] == "user" and e.get("conversation") == conversation_id]
+            asked = [i for i, e in enumerate(events) if e["type"] == "user"]
             if asked:
-                live = [e for e in events[asked[-1] + 1:] if e.get("conversation") == conversation_id]
-        return {"state": state, "agent": agent, "engine": engine, "conversation": conversation_id,
+                live = events[asked[-1] + 1:]
+        return {"state": state, "engine": engine, "conversation": self.conversation(),
                 "live": live, "last": len(events), "epoch": self.log.epoch}
 
     def _on_text(self, text):
         self.partial.append(text)
-        self._event("text", text=text)
+        self.log.add(type="text", text=text)
 
     def _on_notice(self, text):
-        self._event("notice", text=text)
+        self.log.add(type="notice", text=text)
 
     def _on_tool(self, request):
-        self._event("tool", kind=request.kind, label=request.label, detail=request.detail)
+        self.log.add(type="tool", kind=request.kind, label=request.label, detail=request.detail)
+
+    # ---- 허락 ----
 
     def _ask(self, request):
         """에이전트가 허락을 물으면 먼저 custom/rules.py에 묻고, "ask"이면 카드를 띄워 사람의 답을 기다린다."""
-        decision, error = custom_loader.decide(self.agent, request, self.custom)
+        decision, error = custom_loader.decide(request, self.custom)
         if error:
-            self._event("rule_error", message=error)
+            self.log.add(type="rule_error", message=error)
         if decision != "ask":
-            self._event("rule", kind=request.kind, label=request.label, detail=request.detail,
-                        allow=decision == "allow")
+            self.log.add(type="rule", kind=request.kind, label=request.label, detail=request.detail,
+                         allow=decision == "allow")
             return decision == "allow"
         with self.lock:
             self.next_permission += 1
             number = self.next_permission
             waiter = {"event": threading.Event(), "allow": False}
             self.pending[number] = waiter
-        self._event("permission", id=number, kind=request.kind, label=request.label,
-                    detail=request.detail, title=request.title)
+        self.log.add(type="permission", id=number, kind=request.kind, label=request.label,
+                     detail=request.detail, title=request.title)
         answered = waiter["event"].wait(PERMISSION_WAIT_SECONDS)
         with self.lock:
             self.pending.pop(number, None)
         allow = waiter["allow"] if answered else False
-        self._event("permission_result", id=number, allow=allow, timeout=not answered)
+        self.log.add(type="permission_result", id=number, allow=allow, timeout=not answered)
         return allow
 
     def answer(self, number, allow):
@@ -522,130 +468,6 @@ class Platform:
             raise ApiError(404, "기다리는 허락 요청이 없습니다.")
         waiter["allow"] = bool(allow)
         waiter["event"].set()
-
-    # ---- 일과 스케줄 ----
-
-    def tasks(self):
-        items = runner.load_tasks(self.tasks_dir)
-        for task in items:
-            task["lastRun"] = self.ran_at.get(task["name"])
-        return {"tasks": items}
-
-    def run_task(self, name):
-        task = next((t for t in runner.load_tasks(self.tasks_dir) if t["name"] == name), None)
-        if task is None:
-            raise ApiError(404, f"일 '{name}'이 없습니다.")
-        now = datetime.datetime.now()
-        self.last_run[name] = now.date()
-        self.ran_at[name] = now.strftime("%Y-%m-%d %H:%M")
-        self.log.add(type="task", name=name, state="running", agent=task["agent"], engine=task["engine"])
-
-        def work():
-            result = runner.run_task(task["agent"], task["prompt"], name=name, workspace=self.workspace,
-                                     client_factory=self.client_factory, custom=self.custom,
-                                     engine=task["engine"] or None)
-            self.log.add(type="task", name=name, state="done", file=result.path.name,
-                         deliveryError=result.delivery_error)
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def tick(self, now=None):
-        """정해진 시각이 된 일을 돌린다. 스케줄러가 주기적으로 부른다."""
-        now = now or datetime.datetime.now()
-        for task in runner.load_tasks(self.tasks_dir):
-            if runner.is_due(task, now, self.last_run.get(task["name"])):
-                self.run_task(task["name"])
-
-    def schedule_forever(self):
-        stop = threading.Event()
-        while not stop.wait(SCHEDULER_SECONDS):
-            self.tick()
-
-    # ---- 올린 파일 ----
-    #
-    # 사람이 올린 파일은 workspace/inbox/에 둔다. 엔진이 일하는 폴더 안이라서 엔진도 경로로 읽을 수 있다.
-
-    def upload(self, name, data):
-        """파일 하나를 workspace/inbox/에 저장한다. 같은 이름이 있으면 덮어쓰지 않고 뒤에 -2, -3을 붙인다."""
-        folder = self.workspace / "inbox"
-        folder.mkdir(parents=True, exist_ok=True)
-        clean = clean_name(name)
-        stem, dot, suffix = clean.rpartition(".")
-        if not stem:
-            stem, dot, suffix = clean, "", ""
-        path, number = folder / clean, 1
-        while True:
-            try:
-                with open(path, "xb") as out:
-                    out.write(data)
-                return file_info(path)
-            except FileExistsError:
-                number += 1
-                path = folder / f"{stem}-{number}{dot}{suffix}"
-
-    def inbox_path(self, name):
-        path = self.workspace / "inbox" / name
-        if not SAFE_NAME.fullmatch(name) or name.startswith(".") or not path.is_file():
-            raise ApiError(404, "그런 파일이 없습니다.")
-        return path
-
-    def _attachments(self, files):
-        """질문에 붙인 파일(inbox/<이름>)이 실제로 올린 파일인지 확인한다."""
-        if not files:
-            return []
-        if not isinstance(files, list) or len(files) > MAX_FILES:
-            raise ApiError(400, f"파일은 질문 하나에 {MAX_FILES}개까지 붙입니다.")
-        checked = []
-        for item in files:
-            folder, _, name = str(item).partition("/")
-            if folder != "inbox":
-                raise ApiError(400, f"올린 파일 '{item}'을 찾지 못했습니다. 먼저 올립니다.")
-            try:
-                self.inbox_path(name)
-            except ApiError:
-                raise ApiError(400, f"올린 파일 '{item}'을 찾지 못했습니다. 먼저 올립니다.")
-            checked.append(f"inbox/{name}")
-        return checked
-
-    # ---- 결과함 ----
-
-    def outbox(self):
-        """결과 파일 목록. 새로 바뀐 파일이 위에 온다.
-        modified는 대화 기록의 시각과 같은 꼴이다. 화면은 이 값으로 대화를 연 뒤에 생긴 파일을 고른다."""
-        folder = self.workspace / "outbox"
-        files = [p for p in folder.iterdir() if p.is_file() and p.suffix in OUTBOX_TYPES] \
-            if folder.exists() else []
-        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return {"files": [{"name": p.name, "type": p.suffix[1:], "url": f"/outbox/{p.name}",
-                           "modified": _stamp(p.stat().st_mtime)} for p in files]}
-
-    def outbox_path(self, name):
-        path = self.workspace / "outbox" / name
-        if not SAFE_NAME.fullmatch(name) or path.suffix not in OUTBOX_TYPES or not path.is_file():
-            raise ApiError(404, "그런 결과 파일이 없습니다.")
-        return path
-
-    def read_outbox(self, name):
-        path = self.outbox_path(name)
-        return {"name": name, "type": path.suffix[1:], "url": f"/outbox/{name}",
-                "text": path.read_text(encoding="utf-8", errors="replace")}
-
-    # ---- 이름과 색, 스킬 ----
-
-    def brand(self):
-        return custom_loader.brand(self.custom)
-
-    def skills(self):
-        return {"skills": custom_loader.skills(self.workspace)}
-
-    def skill(self, name):
-        """스킬 하나의 SKILL.md와 그 스킬을 쓰는 에이전트."""
-        found = next((s for s in custom_loader.skills(self.workspace) if s["name"] == name), None)
-        if found is None:
-            raise ApiError(404, f"스킬 '{name}'이 없습니다.")
-        users = [a["name"] for a in custom_loader.agents(self.custom) if a["skills"] is None or name in a["skills"]]
-        text = (self.workspace / found["path"]).read_text(encoding="utf-8")
-        return {**found, "text": text, "agents": users}
 
 
 def make_handler(platform):
@@ -664,107 +486,68 @@ def make_handler(platform):
         def read_json(self):
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                return json.loads(self.rfile.read(length) or b"{}")
+                body = json.loads(self.rfile.read(length) or b"{}")
             except json.JSONDecodeError:
                 raise ApiError(400, "JSON이 아닙니다.")
+            if not isinstance(body, dict):
+                raise ApiError(400, "JSON 객체를 보냅니다.")
+            return body
 
-        def send_file(self, path, sandbox=False):
-            types = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", **OUTBOX_TYPES}
+        def send_file(self, path):
             data = path.read_bytes()
             self.send_response(200)
-            if sandbox:
-                # 에이전트가 만든 파일과 사람이 올린 파일은 대시보드의 API를 부르지 못하게 따로 떼어 연다.
-                self.send_header("Content-Security-Policy", "sandbox")
-                self.send_header("X-Content-Type-Options", "nosniff")
-            kind = types.get(path.suffix.lower())
-            if kind:
-                kind += "; charset=utf-8"
-            else:
-                kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            self.send_header("Content-Type", kind)
+            self.send_header("Content-Type", STATIC_TYPES.get(path.suffix, "text/plain") + "; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
 
+        def parts(self):
+            return [unquote(p) for p in urlparse(self.path).path.split("/") if p]
+
         def do_GET(self):
-            url = urlparse(self.path)
-            parts = [unquote(p) for p in url.path.split("/") if p]
+            parts = self.parts()
             try:
                 if not parts:
                     return self.send_file(STATIC / "index.html")
-                if parts[0] == "static" and len(parts) == 2 and SAFE_NAME.fullmatch(parts[1]) \
+                if len(parts) == 2 and parts[0] == "static" and SAFE_NAME.fullmatch(parts[1]) \
                         and (STATIC / parts[1]).is_file():
                     return self.send_file(STATIC / parts[1])
-                if len(parts) == 2 and parts[0] == "outbox":
-                    return self.send_file(platform.outbox_path(parts[1]), sandbox=True)
-                if len(parts) == 2 and parts[0] == "inbox":
-                    return self.send_file(platform.inbox_path(parts[1]), sandbox=True)
                 if parts == ["api", "engines"]:
                     return self.send_json(200, platform.engines())
-                if parts == ["api", "agents"]:
-                    return self.send_json(200, platform.agents())
                 if parts == ["api", "brand"]:
-                    return self.send_json(200, platform.brand())
-                if parts == ["api", "skills"]:
-                    return self.send_json(200, platform.skills())
-                if len(parts) == 3 and parts[:2] == ["api", "skills"]:
-                    return self.send_json(200, platform.skill(parts[2]))
+                    return self.send_json(200, custom_loader.brand(platform.custom))
+                if parts == ["api", "state"]:
+                    return self.send_json(200, platform.snapshot())
+                if parts == ["api", "conversation"]:
+                    return self.send_json(200, platform.conversation())
                 if parts == ["api", "events"]:
-                    after = int(parse_qs(url.query).get("after", ["0"])[0])
+                    query = parse_qs(urlparse(self.path).query)
+                    after = int(query.get("after", ["0"])[0] or 0)
                     events = platform.log.since(after)
                     last = events[-1]["seq"] if events else after
                     return self.send_json(200, {"events": events, "last": last, "epoch": platform.log.epoch,
-                                                "state": platform.state, "agent": platform.agent,
-                                                "engine": platform.engine, "conversation": platform.conversation_id})
-                if parts == ["api", "state"]:
-                    return self.send_json(200, platform.snapshot())
-                if parts == ["api", "conversations"]:
-                    return self.send_json(200, platform.conversations())
-                if len(parts) == 3 and parts[:2] == ["api", "conversations"]:
-                    return self.send_json(200, platform.conversation(parts[2]))
-                if parts == ["api", "tasks"]:
-                    return self.send_json(200, platform.tasks())
-                if parts == ["api", "outbox"]:
-                    return self.send_json(200, platform.outbox())
-                if len(parts) == 3 and parts[:2] == ["api", "outbox"]:
-                    return self.send_json(200, platform.read_outbox(parts[2]))
+                                                "state": platform.state, "engine": platform.engine})
                 raise ApiError(404, "없는 주소입니다.")
+            except ValueError:
+                self.send_json(400, {"error": "after는 숫자입니다."})
             except ApiError as error:
                 self.send_json(error.status, {"error": str(error)})
 
-        def read_upload(self):
-            """올리는 파일의 본문(파일 그대로)을 읽는다. 너무 크면 다 읽어 버린 뒤 413으로 거절한다."""
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > UPLOAD_BYTES:
-                while length > 0:
-                    chunk = self.rfile.read(min(length, 1024 * 1024))
-                    if not chunk:
-                        break
-                    length -= len(chunk)
-                raise ApiError(413, f"파일이 너무 큽니다. {UPLOAD_BYTES // (1024 * 1024)}MB까지 올립니다.")
-            return self.rfile.read(length)
-
         def do_POST(self):
-            url = urlparse(self.path)
-            parts = [unquote(p) for p in url.path.split("/") if p]
+            parts = self.parts()
             try:
-                if parts == ["api", "uploads"]:
-                    name = parse_qs(url.query).get("name", [""])[0]
-                    return self.send_json(201, platform.upload(name, self.read_upload()))
                 body = self.read_json()
-                if parts == ["api", "conversations"]:
-                    return self.send_json(201, platform.create_conversation(body.get("agent"), body.get("engine")))
-                if len(parts) == 4 and parts[:2] == ["api", "conversations"] and parts[3] == "prompt":
-                    platform.prompt(parts[2], body.get("text"), body.get("files"))
+                if parts == ["api", "conversation", "new"]:
+                    return self.send_json(201, platform.new_conversation())
+                if parts == ["api", "connect"]:
+                    platform.connect(body.get("engine"))
                     return self.send_json(202, {"ok": True})
-                if parts == ["api", "agents"]:
-                    return self.send_json(201, platform.save_agent(body, create=True))
+                if parts == ["api", "prompt"]:
+                    platform.prompt(body.get("text"))
+                    return self.send_json(202, {"ok": True})
                 if len(parts) == 3 and parts[:2] == ["api", "permissions"] and parts[2].isdigit():
                     platform.answer(int(parts[2]), body.get("allow") is True)
                     return self.send_json(200, {"ok": True})
-                if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] == "run":
-                    platform.run_task(parts[2])
-                    return self.send_json(202, {"ok": True})
                 if len(parts) == 3 and parts[:2] == ["api", "login"]:
                     platform.logins.start(parts[2])
                     return self.send_json(202, {"ok": True})
@@ -778,32 +561,9 @@ def make_handler(platform):
             except ApiError as error:
                 self.send_json(error.status, {"error": str(error)})
 
-        def do_PUT(self):
-            parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
-            try:
-                body = self.read_json()
-                if len(parts) == 3 and parts[:2] == ["api", "agents"]:
-                    return self.send_json(200, platform.save_agent({**body, "name": parts[2]}, create=False))
-                raise ApiError(404, "없는 주소입니다.")
-            except ApiError as error:
-                self.send_json(error.status, {"error": str(error)})
-
-        def do_PATCH(self):
-            parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
-            try:
-                body = self.read_json()
-                if len(parts) == 3 and parts[:2] == ["api", "conversations"]:
-                    return self.send_json(200, platform.change_engine(parts[2], body.get("engine")))
-                raise ApiError(404, "없는 주소입니다.")
-            except ApiError as error:
-                self.send_json(error.status, {"error": str(error)})
-
         def do_DELETE(self):
-            parts = [unquote(p) for p in urlparse(self.path).path.split("/") if p]
+            parts = self.parts()
             try:
-                if len(parts) == 3 and parts[:2] == ["api", "conversations"]:
-                    platform.delete_conversation(parts[2])
-                    return self.send_json(200, {"ok": True})
                 if len(parts) == 3 and parts[:2] == ["api", "login"]:
                     platform.logins.cancel(parts[2])
                     return self.send_json(200, {"ok": True})
@@ -822,7 +582,6 @@ def main():
     custom_loader.load_env()
     platform = Platform()
     server = serve(platform)
-    threading.Thread(target=platform.schedule_forever, daemon=True).start()
     url = f"http://{HOST}:{PORT}"
     print(f"대시보드: {url}  (끝내려면 Ctrl+C)")
     if "--no-browser" not in sys.argv:

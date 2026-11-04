@@ -3,7 +3,6 @@
 실행: python -m unittest discover tests
 """
 
-import datetime
 import json
 import os
 import pathlib
@@ -11,7 +10,6 @@ import sys
 import tempfile
 import threading
 import time
-import unicodedata
 import unittest
 from unittest import mock
 import urllib.error
@@ -20,7 +18,6 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import dashboard  # noqa: E402
-import runner  # noqa: E402
 import engines  # noqa: E402
 from engines import AcpEngine  # noqa: E402
 
@@ -61,21 +58,10 @@ def fake_factory(engine, workspace, **callbacks):
     return engines.make(engine, workspace, command=FAKE + [mode], env=dict(os.environ), **callbacks)
 
 
-def write_agent(root, name, engine="kiro", skills="모두", role="역할"):
-    folder = pathlib.Path(root) / "custom" / "agents"
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{name}.md").write_text(f"---\nengine: {engine}\ndescription: {name} 설명\nskills: {skills}\n---\n{role}\n",
-                                       encoding="utf-8")
-
-
 class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.root = pathlib.Path(tempfile.mkdtemp())
         (self.root / "workspace").mkdir()
-        (self.root / "tasks").mkdir()
-        (self.root / "tasks" / "아침_브리핑.md").write_text(
-            "---\nagent: 기본_도우미\ntime: 23:59\n---\n오늘 할 일을 정리해 줘\n", encoding="utf-8")
-        write_agent(self.root, "기본_도우미", role="너는 기본 도우미다.")
         ENGINES_USED.clear()
         self.platform = dashboard.Platform(self.root, client_factory=fake_factory,
                                            status_checker=lambda name: True,
@@ -94,8 +80,8 @@ class DashboardTest(unittest.TestCase):
         if self.platform.client:
             self.platform.client.close()
 
-    def call(self, method, path, body=None):
-        data = json.dumps(body).encode() if body is not None else None
+    def call(self, method, path, body=None, raw=None):
+        data = raw if raw is not None else json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method=method,
                                          headers={"Content-Type": "application/json"})
         try:
@@ -105,211 +91,278 @@ class DashboardTest(unittest.TestCase):
             with error:
                 return error.code, json.loads(error.read())
 
-    def wait_for(self, check, timeout=15, log=None):
+    def wait_for(self, check, timeout=15, log=None, after=0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             events = (log or self.platform.log).events
-            found = [e for e in events if check(e)]
+            found = [e for e in events if e["seq"] > after and check(e)]
             if found:
                 return found[0]
             time.sleep(0.05)
         self.fail("기다린 사건이 오지 않았습니다.")
 
-    def new_conversation(self, agent="기본_도우미", engine=None):
-        status, body = self.call("POST", "/api/conversations", {"agent": agent, "engine": engine})
-        self.assertEqual(status, 201, body)
-        return body["id"]
-
-    def send(self, conversation, text):
+    def send(self, text):
         """질문을 보내고, 보내기 전의 사건 수를 돌려준다. 그 뒤의 사건이 이 질문의 것이다."""
         start = len(self.platform.log.events)
-        status, body = self.call("POST", f"/api/conversations/{conversation}/prompt", {"text": text})
+        status, body = self.call("POST", "/api/prompt", {"text": text})
         self.assertEqual(status, 202, body)
         return start
 
-    def ask(self, conversation, text):
+    def ask(self, text):
         """질문을 보내고 차례가 끝날 때까지 기다린 뒤 받은 답 조각을 이어 돌려준다."""
-        start = self.send(conversation, text)
-        self.wait_for(lambda e: e["type"] == "done" and e["seq"] > start)
+        start = self.send(text)
+        self.wait_for(lambda e: e["type"] == "done", after=start)
         return "".join(e["text"] for e in self.platform.log.events[start:] if e["type"] == "text")
+
+    def connect(self, engine):
+        """엔진을 연결하고 준비될 때까지 기다린다."""
+        start = len(self.platform.log.events)
+        status, body = self.call("POST", "/api/connect", {"engine": engine})
+        self.assertEqual(status, 202, body)
+        self.wait_for(lambda e: e["type"] == "status" and e["state"] == "ready", after=start)
+        return start
 
     def text_so_far(self):
         return "".join(e["text"] for e in self.platform.log.events if e["type"] == "text")
 
-    def test_chat_streams_answer_through_events(self):
-        conversation = self.new_conversation()
-        self.assertEqual(self.ask(conversation, "안녕"), "받음: 안녕")
-        status, body = self.call("GET", "/api/events?after=0")
-        self.assertEqual(status, 200)
-        self.assertEqual([e["type"] for e in body["events"]][:4], ["user", "status", "status", "preamble"])
-        self.assertTrue(all(e["conversation"] == conversation for e in body["events"]))
-        self.assertEqual(body["last"], body["events"][-1]["seq"])
+    def last_preamble(self):
+        return [e for e in self.platform.log.events if e["type"] == "preamble"][-1]
 
-    def test_permission_card_is_answered_through_api(self):
-        conversation = self.new_conversation()
-        self.send(conversation, "도구 써 줘")
-        card = self.wait_for(lambda e: e["type"] == "permission")
-        self.assertEqual((card["title"], card["conversation"]), ("Running: date", conversation))
-        status, _ = self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
-        self.assertEqual(status, 200)
-        self.wait_for(lambda e: e["type"] == "done")
-        self.assertTrue(self.text_so_far().endswith("/ allow-once"))
-
-    def test_prompt_needs_a_conversation_and_text(self):
-        status, _ = self.call("POST", "/api/conversations/20261021-000000-abcd/prompt", {"text": "안녕"})
-        self.assertEqual(status, 404)
-        status, _ = self.call("POST", "/api/conversations/..%2F..%2Fengines/prompt", {"text": "안녕"})
-        self.assertEqual(status, 404)
-        conversation = self.new_conversation()
-        status, body = self.call("POST", f"/api/conversations/{conversation}/prompt", {"text": "  "})
-        self.assertEqual(status, 400)
-        self.assertIn("error", body)
-
-    def test_unknown_agent_or_engine_is_refused(self):
-        status, _ = self.call("POST", "/api/conversations", {"agent": "없는에이전트"})
-        self.assertEqual(status, 404)
-        status, _ = self.call("POST", "/api/conversations", {"agent": "기본_도우미", "engine": "없는엔진"})
-        self.assertEqual(status, 400)
-        conversation = self.new_conversation()
-        status, _ = self.call("PATCH", f"/api/conversations/{conversation}", {"engine": "없는엔진"})
-        self.assertEqual(status, 400)
-
-    def test_task_runs_and_result_appears_in_outbox(self):
-        status, body = self.call("GET", "/api/tasks")
-        self.assertEqual(body["tasks"][0]["name"], "아침_브리핑")
-        self.assertIsNone(body["tasks"][0]["lastRun"])
-        self.assertEqual(body["tasks"][0]["time"], "23:59")
-        status, _ = self.call("POST", "/api/tasks/%EC%95%84%EC%B9%A8_%EB%B8%8C%EB%A6%AC%ED%95%91/run")
-        self.assertEqual(status, 202)
-        done = self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done")
-        status, body = self.call("GET", "/api/outbox")
-        self.assertEqual(body["files"][0]["name"], done["file"])
-        status, body = self.call("GET", "/api/tasks")
-        self.assertIsNotNone(body["tasks"][0]["lastRun"])
-        status, body = self.call("GET", "/api/outbox/" + urllib.request.quote(done["file"]))
-        self.assertIn("받음: 오늘 할 일을 정리해 줘", body["text"])
-
-    def test_outbox_rejects_paths_outside(self):
-        status, _ = self.call("GET", "/api/outbox/..%2F..%2Fengines.json")
-        self.assertEqual(status, 404)
-
-    def test_engines_list_login_state(self):
-        status, body = self.call("GET", "/api/engines")
-        self.assertEqual(status, 200)
-        self.assertEqual({e["name"] for e in body["engines"]}, {"kiro", "claude", "codex"})
-        self.assertTrue(all(e["loggedIn"] is True for e in body["engines"]))
-
-    def test_tick_runs_due_task_once_a_day(self):
-        now = datetime.datetime.combine(datetime.date.today(), datetime.time(23, 59))
-        self.platform.last_run.pop("아침_브리핑", None)
-        self.platform.tick(now)
-        self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done")
-        self.platform.tick(now)
-        runs = [e for e in self.platform.log.events if e["type"] == "task" and e["state"] == "running"]
-        self.assertEqual(len(runs), 1)
-
-
-    # ---- 플랫폼 안내, 규칙, 보내기 ----
+    def conversation(self):
+        return self.call("GET", "/api/conversation")[1]
 
     def write_custom(self, name, text):
         (self.root / "custom").mkdir(exist_ok=True)
         (self.root / "custom" / name).write_text(text, encoding="utf-8")
 
+    # ---- 화면과 읽기 API ----
+
+    def test_page_and_static_files_are_served(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as response:
+            self.assertIn("text/html", response.headers["Content-Type"])
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/static/app.js") as response:
+            self.assertIn("text/javascript", response.headers["Content-Type"])
+        self.assertEqual(self.call("GET", "/static/..%2F..%2Fdashboard.py")[0], 404)
+        self.assertEqual(self.call("GET", "/api/" + urllib.request.quote("없는것"))[0], 404)
+
+    def test_state_has_the_current_conversation(self):
+        status, state = self.call("GET", "/api/state")
+        self.assertEqual((status, state["state"], state["engine"], state["live"]), (200, "idle", None, []))
+        self.assertEqual(state["conversation"]["messages"], [])
+        self.assertEqual(state["conversation"]["engine"], engines.names()[0])
+        self.assertEqual(self.conversation()["id"], state["conversation"]["id"])
+
+    def test_engines_list_login_state(self):
+        status, body = self.call("GET", "/api/engines")
+        self.assertEqual(status, 200)
+        self.assertEqual({e["name"] for e in body["engines"]}, set(engines.names()))
+        self.assertTrue(all(e["loggedIn"] is True for e in body["engines"]))
+
+    def test_brand(self):
+        self.write_custom("brand.json", '{"name": "마감지기", "tagline": "마감만 본다", "accent": "#123456"}')
+        status, body = self.call("GET", "/api/brand")
+        self.assertEqual((status, body["name"], body["tagline"], body["accent"]), (200, "마감지기", "마감만 본다", "#123456"))
+
+    def test_events_tell_a_stale_page_to_start_over(self):
+        status, body = self.call("GET", "/api/events?after=500")   # 서버를 다시 켜기 전의 번호
+        self.assertEqual((status, body["events"]), (200, []))
+        self.assertEqual(body["epoch"], self.platform.log.epoch)
+        self.assertEqual(self.call("GET", "/api/events?after=x")[0], 400)
+
+    # ---- 대화 ----
+
+    def test_chat_streams_answer_through_events(self):
+        self.assertEqual(self.ask("안녕"), "받음: 안녕")
+        status, body = self.call("GET", "/api/events?after=0")
+        self.assertEqual(status, 200)
+        self.assertEqual([e["type"] for e in body["events"]][:4], ["user", "status", "preamble", "status"])
+        self.assertEqual(body["last"], body["events"][-1]["seq"])
+        roles = [m["role"] for m in self.conversation()["messages"]]
+        self.assertEqual(roles, ["user", "preamble", "agent"])
+
+    def test_prompt_needs_text_and_json(self):
+        status, body = self.call("POST", "/api/prompt", {"text": "  "})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+        self.assertEqual(self.call("POST", "/api/prompt", raw=b"{")[0], 400)
+        self.assertEqual(self.call("POST", "/api/prompt", raw=b"[1]")[0], 400)
+
     def test_preamble_goes_with_first_prompt_only(self):
         self.write_custom("업무.md", "- 맡는 업무: 마감 정리\n")
-        conversation = self.new_conversation()
-        self.assertEqual(self.ask(conversation, "안내"), "받음: 있음")
-        note = self.wait_for(lambda e: e["type"] == "preamble")
-        self.assertIn("마감 정리", note["text"])
-        self.assertEqual(self.ask(conversation, "안내"), "받음: 없음")
+        self.assertEqual(self.ask("안내"), "받음: 있음")
+        self.assertIn("마감 정리", self.last_preamble()["text"])
+        self.assertEqual(self.ask("안내"), "받음: 없음")
+        self.assertEqual(len(ENGINES_USED), 1)                # 같은 세션을 그대로 쓴다
+
+    def test_tools_and_refusals_are_kept_in_the_record(self):
+        self.send("도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
+        self.wait_for(lambda e: e["type"] == "done")
+        agent = self.conversation()["messages"][-1]
+        # 가짜 엔진은 Kiro처럼 시작 알림에 제목만 보내고, 명령은 허락 요청에 담는다.
+        self.assertEqual((agent["tools"], agent["refused"]), (["명령 실행 Running: date"], ["명령 실행 date"]))
+
+    def test_platform_keeps_working_when_the_record_cannot_be_saved(self):
+        # Windows에서는 다른 프로그램이 파일을 잡고 있으면 저장이 실패할 수 있다. 그래도 답을 끝내고 다음 질문을 받는다.
+        real_append = self.platform.store.append
+
+        def append(conversation_id, message):
+            if message["role"] == "agent":
+                raise PermissionError(13, "다른 프로그램이 파일을 쓰는 중")
+            return real_append(conversation_id, message)
+
+        with mock.patch.object(self.platform.store, "append", append):
+            self.assertEqual(self.ask("하나"), "받음: 하나")
+        self.wait_for(lambda e: e["type"] == "record_error")
+        self.assertEqual(self.platform.state, "ready")
+        self.assertEqual(self.ask("둘"), "받음: 둘")
+
+    def test_conversation_continues_after_restart(self):
+        self.ask("어제 한 이야기")
+        # 대시보드를 껐다 켠 것과 같다: 같은 폴더로 플랫폼을 새로 만든다.
+        restarted = dashboard.Platform(self.root, client_factory=fake_factory, status_checker=lambda name: True,
+                                       install_checker=lambda engine: True)
+        self.addCleanup(lambda: restarted.client and restarted.client.close())
+        restarted.prompt("오늘 이어서")
+        self.wait_for(lambda e: e["type"] == "done", log=restarted.log)
+        note = self.wait_for(lambda e: e["type"] == "preamble", log=restarted.log)
+        self.assertEqual(note["history"], 2)
+        self.assertIn("[사용자] 어제 한 이야기", note["text"])
+
+    def test_new_conversation_starts_without_history_and_keeps_the_old_file(self):
+        old = self.conversation()["id"]
+        self.ask("하나")
+        self.assertIsNotNone(self.platform.client)
+        status, fresh = self.call("POST", "/api/conversation/new")
+        self.assertEqual((status, fresh["messages"]), (201, []))
+        self.assertNotEqual(fresh["id"], old)
+        self.assertIsNone(self.platform.client)               # 엔진의 기억에 앞의 대화가 남아 있어서 닫는다
+        self.assertEqual(self.conversation()["id"], fresh["id"])
+        self.assertTrue((self.root / "conversations" / f"{old}.json").is_file())   # 앞의 대화는 지우지 않는다
+        self.wait_for(lambda e: e["type"] == "conversation" and e["id"] == fresh["id"])
+        self.ask("둘")
+        self.assertEqual(self.last_preamble()["history"], 0)
+        self.assertNotIn("지금까지의 대화", self.last_preamble()["text"])
+
+    def test_new_conversation_reuses_an_empty_one(self):
+        first = self.call("POST", "/api/conversation/new")[1]["id"]
+        self.assertEqual(self.call("POST", "/api/conversation/new")[1]["id"], first)
+        self.assertEqual(len(list((self.root / "conversations").glob("*.json"))), 1)
+
+    def test_state_has_the_live_turn_for_a_page_opened_midway(self):
+        self.send("도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        status, state = self.call("GET", "/api/state")
+        self.assertEqual(state["state"], "busy")
+        types = [e["type"] for e in state["live"]]
+        self.assertIn("permission", types)
+        self.assertNotIn("user", types)                    # 질문은 대화 기록에 이미 있다
+        self.assertEqual(state["conversation"]["messages"][0]["text"], "도구 써 줘")
+        self.assertEqual(state["last"], len(self.platform.log.events))
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
+        self.wait_for(lambda e: e["type"] == "done")
+        self.assertEqual(self.call("GET", "/api/state")[1]["live"], [])
+
+    def test_busy_session_refuses_new_conversation_connect_and_prompt(self):
+        self.send("도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        self.assertEqual(self.call("POST", "/api/conversation/new")[0], 409)
+        self.assertEqual(self.call("POST", "/api/connect", {"engine": engines.names()[1]})[0], 409)
+        self.assertEqual(self.call("POST", "/api/prompt", {"text": "끼어들기"})[0], 409)
+        self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
+        self.wait_for(lambda e: e["type"] == "done")
+        self.assertEqual(self.call("POST", "/api/conversation/new")[0], 201)
+
+    # ---- 허락 ----
+
+    def test_permission_card_is_answered_through_api(self):
+        self.send("도구 써 줘")
+        card = self.wait_for(lambda e: e["type"] == "permission")
+        self.assertEqual(card["title"], "Running: date")
+        self.assertEqual(self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})[0], 200)
+        self.wait_for(lambda e: e["type"] == "done")
+        self.assertTrue(self.text_so_far().endswith("/ allow-once"))
+        self.assertEqual(self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})[0], 404)
 
     def test_rule_allows_without_card(self):
-        self.write_custom("rules.py", "def decide(agent, request):\n"
+        self.write_custom("rules.py", "def decide(request):\n"
                                       "    return 'allow' if request.command == 'date' else 'ask'\n")
-        conversation = self.new_conversation()
-        self.assertTrue(self.ask(conversation, "도구 써 줘").endswith("/ allow-once"))
+        self.assertTrue(self.ask("도구 써 줘").endswith("/ allow-once"))
         rule = self.wait_for(lambda e: e["type"] == "rule")
         self.assertEqual((rule["allow"], rule["detail"]), (True, "date"))
         self.assertFalse([e for e in self.platform.log.events if e["type"] == "permission"])
 
     def test_broken_rule_falls_back_to_card(self):
-        self.write_custom("rules.py", "def decide(agent, request):\n    return 1 / 0\n")
-        self.send(self.new_conversation(), "도구 써 줘")
+        self.write_custom("rules.py", "def decide(request):\n    return 1 / 0\n")
+        self.send("도구 써 줘")
         card = self.wait_for(lambda e: e["type"] == "permission")
         self.wait_for(lambda e: e["type"] == "rule_error")
         self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
         self.wait_for(lambda e: e["type"] == "done")
 
-    def test_unattended_task_refuses_ask_and_delivers(self):
-        self.write_custom("deliver.py", "def deliver(task, agent, path, text):\n"
-                                        "    path.with_suffix('.sent').write_text(task + '|' + agent + '|' + text, encoding='utf-8')\n")
-        result = runner.run_task("기본_도우미", "도구 써 줘", name="일", workspace=self.root / "workspace",
-                                 client_factory=fake_factory, custom=self.root / "custom")
-        self.assertIsNone(result.delivery_error)
-        text = result.path.read_text(encoding="utf-8")
-        self.assertIn("- 거절한 도구: 명령 실행 date", text)
-        self.assertIn("/ reject", text)
-        self.assertTrue(result.path.with_suffix(".sent").read_text(encoding="utf-8").startswith("일|기본_도우미|받음: 도구 써 줘"))
+    def test_refusal_on_codex_style_engine_still_ends_as_done(self):
+        with mock.patch.dict(os.environ, {"FAKE_STYLE": "codex"}):
+            self.connect("codex")
+            self.send("도구 써 줘")
+            card = self.wait_for(lambda e: e["type"] == "permission")
+            self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
+            done = self.wait_for(lambda e: e["type"] == "done")
+        notice = self.wait_for(lambda e: e["type"] == "notice")
+        self.assertIn("이어서 하게 했다", notice["text"])
+        self.assertEqual((done["stop"], done["stopLabel"], done["refused"]), ("done", "끝", 1))
 
-    def test_delivery_error_is_reported(self):
-        self.write_custom("deliver.py", "def deliver(task, agent, path, text):\n    raise RuntimeError('웹훅 실패')\n")
-        self.call("POST", "/api/tasks/%EC%95%84%EC%B9%A8_%EB%B8%8C%EB%A6%AC%ED%95%91/run")
-        done = self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done")
-        self.assertIn("웹훅 실패", done["deliveryError"])
+    # ---- 엔진 연결과 바꾸기 ----
 
-    # ---- 이름과 색, 스킬, 결과함 ----
+    def test_connect_opens_the_session_before_the_first_question(self):
+        self.connect("claude")
+        self.assertEqual((self.platform.state, self.platform.engine, ENGINES_USED), ("ready", "claude", ["claude"]))
+        conversation = self.conversation()
+        self.assertEqual(conversation["engine"], "claude")
+        self.assertEqual([m["role"] for m in conversation["messages"]], ["note", "preamble"])
+        self.assertEqual(self.ask("안내"), "받음: 있음")    # 안내는 연결 뒤 첫 질문에 붙는다
+        self.assertEqual(ENGINES_USED, ["claude"])
 
-    def test_brand_and_skills(self):
-        self.write_custom("brand.json", '{"name": "마감지기", "accent": "#123456"}')
-        status, body = self.call("GET", "/api/brand")
-        self.assertEqual((status, body["name"]), (200, "마감지기"))
-        skill = self.root / "workspace" / "skills" / "deadline"
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: deadline\ndescription: 마감 표\n---\n", encoding="utf-8")
-        status, body = self.call("GET", "/api/skills")
-        self.assertEqual(body["skills"][0]["name"], "deadline")
+    def test_unknown_engine_is_refused(self):
+        self.assertEqual(self.call("POST", "/api/connect", {"engine": "없는엔진"})[0], 400)
+        self.assertEqual(self.call("POST", "/api/connect", {})[0], 400)
 
-    def test_skill_detail_has_text_and_agents_using_it(self):
-        skill = self.root / "workspace" / "skills" / "deadline"
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: deadline\ndescription: 마감 표\n---\n# 마감 표 만들기\n",
-                                        encoding="utf-8")
-        write_agent(self.root, "마감_정리", skills="deadline")
-        write_agent(self.root, "손으로", skills="없음")
-        status, body = self.call("GET", "/api/skills/deadline")
-        self.assertEqual(status, 200)
-        self.assertIn("# 마감 표 만들기", body["text"])
-        self.assertEqual(body["agents"], ["기본_도우미", "마감_정리"])   # 기본_도우미는 모든 스킬을 쓴다
-        status, _ = self.call("GET", "/api/skills/" + urllib.request.quote("없는스킬"))
-        self.assertEqual(status, 404)
+    def test_failed_connect_is_reported_and_can_be_tried_again(self):
+        def broken(engine, workspace, **callbacks):
+            raise dashboard.EngineError("엔진을 찾지 못했습니다")
 
-    def test_outbox_lists_html_and_serves_it_sandboxed(self):
-        outbox = self.root / "workspace" / "outbox"
-        outbox.mkdir()
-        (outbox / "리포트.html").write_text("<h1>보고</h1>", encoding="utf-8")
-        (outbox / "메모.json").write_text('{"a": 1}', encoding="utf-8")
-        (outbox / "비밀.sh").write_text("echo", encoding="utf-8")
-        status, body = self.call("GET", "/api/outbox")
-        self.assertEqual({f["name"] for f in body["files"]}, {"리포트.html", "메모.json"})
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/outbox/"
-                                    + urllib.request.quote("리포트.html")) as response:
-            self.assertEqual(response.headers["Content-Security-Policy"], "sandbox")
-            self.assertIn("text/html", response.headers["Content-Type"])
-            self.assertEqual(response.read().decode(), "<h1>보고</h1>")
-        status, _ = self.call("GET", "/outbox/" + urllib.request.quote("비밀.sh"))
-        self.assertEqual(status, 404)
+        with mock.patch.object(self.platform, "client_factory", broken):
+            self.call("POST", "/api/connect", {"engine": "claude"})
+            failed = self.wait_for(lambda e: e["type"] == "status" and e["state"] == "error")
+        self.assertIn("찾지 못했습니다", failed["message"])
+        self.assertTrue(self.conversation()["messages"][-1]["error"])
+        self.connect("claude")
+        self.assertEqual(self.ask("안녕"), "받음: 안녕")
 
-    def test_outbox_tells_when_each_file_changed(self):
-        # 대화 화면은 대화를 연 때부터 마지막 메시지까지 바뀐 파일만 그 대화의 결과로 보인다. 시각은 대화 기록과 같은 꼴이다.
-        outbox = self.root / "workspace" / "outbox"
-        outbox.mkdir()
-        (outbox / "옛것.md").write_text("옛", encoding="utf-8")
-        os.utime(outbox / "옛것.md", (0, datetime.datetime(2026, 10, 1, 9, 0).timestamp()))
-        (outbox / "새것.md").write_text("새", encoding="utf-8")
-        status, body = self.call("GET", "/api/outbox")
-        self.assertEqual([f["name"] for f in body["files"]], ["새것.md", "옛것.md"])
-        self.assertEqual(body["files"][1]["modified"], "2026-10-01 09:00:00.000")
-        self.assertGreater(body["files"][0]["modified"], body["files"][1]["modified"])
+    def test_conversation_continues_on_another_engine(self):
+        first, second = engines.names()[:2]
+        self.assertEqual(self.ask("발표안내.md를 기억해"), "받음: 발표안내.md를 기억해")
+        start = self.connect(second)
+        note = self.wait_for(lambda e: e["type"] == "note", after=start)
+        self.assertIn(f"엔진을 {first}에서 {second}로 바꿨다", note["text"])
+        preamble = self.last_preamble()
+        self.assertEqual(preamble["history"], 2)
+        self.assertIn("[사용자] 발표안내.md를 기억해", preamble["text"])
+        self.assertIn("[에이전트] 받음: 발표안내.md를 기억해", preamble["text"])
+        self.assertNotIn("바꿨다", preamble["text"])         # 플랫폼의 알림은 앞의 대화에 넣지 않는다
+        self.assertEqual(self.ask("이어서"), "받음: 이어서")
+        self.assertEqual(ENGINES_USED, [first, second])
+
+    def test_same_preamble_on_any_engine(self):
+        texts = []
+        for engine in engines.names():
+            self.call("POST", "/api/conversation/new")         # 앞의 대화가 없을 때 안내는 엔진과 상관없이 같다
+            self.connect(engine)
+            self.assertEqual(self.ask("안내"), "받음: 있음")
+            texts.append(self.last_preamble()["text"])
+        self.assertEqual(len(set(texts)), 1)
+        for name in engines.names():
+            self.assertNotIn(name, texts[0])
 
     # ---- 로그인 ----
 
@@ -377,324 +430,6 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("kiro-cli login", body["error"])
         status, _ = self.call("POST", "/api/logout/kiro")
         self.assertEqual(status, 400)
-
-
-    # ---- 에이전트와 엔진 ----
-
-    def test_agent_runs_on_its_engine_or_a_chosen_one(self):
-        status, body = self.call("POST", "/api/conversations", {"agent": "기본_도우미"})
-        self.assertEqual((body["agent"], body["engine"]), ("기본_도우미", "kiro"))
-        self.ask(body["id"], "하나")
-        other = self.new_conversation(engine="codex")
-        self.ask(other, "둘")
-        self.assertEqual(ENGINES_USED, ["kiro", "codex"])
-        status, body = self.call("GET", "/api/agents")
-        self.assertEqual((body["current"], body["engine"]), ("기본_도우미", "codex"))
-
-    def test_same_agent_gets_same_preamble_on_any_engine(self):
-        texts = []
-        for engine in ("kiro", "claude", "codex"):
-            conversation = self.new_conversation(engine=engine)   # 앞의 대화가 없을 때 안내는 엔진과 상관없이 같다
-            self.assertEqual(self.ask(conversation, "안내"), "받음: 있음")
-            texts.append([e for e in self.platform.log.events if e["type"] == "preamble"][-1]["text"])
-        self.assertEqual(len(set(texts)), 1)
-        self.assertIn("너는 기본 도우미다.", texts[0])
-
-    def test_create_and_update_agent(self):
-        body = {"name": "마감_정리", "engine": "claude", "description": "마감 표", "skills": None, "role": "마감만 본다."}
-        status, created = self.call("POST", "/api/agents", body)
-        self.assertEqual((status, created["engine"], created["role"]), (201, "claude", "마감만 본다."))
-        self.assertTrue((self.root / "custom" / "agents" / "마감_정리.md").is_file())
-        status, _ = self.call("POST", "/api/agents", body)
-        self.assertEqual(status, 409)
-        status, updated = self.call("PUT", "/api/agents/" + urllib.request.quote("마감_정리"),
-                                    {"engine": "codex", "description": "바뀜", "skills": [], "role": "새 역할"})
-        self.assertEqual((status, updated["engine"], updated["skills"]), (200, "codex", []))
-        status, body = self.call("GET", "/api/agents")
-        self.assertEqual([a["name"] for a in body["agents"]], ["기본_도우미", "마감_정리"])
-
-    def test_agent_input_is_checked(self):
-        cases = [({"name": "빈 칸", "engine": "kiro"}, 400), ({"name": "a", "engine": "없는엔진"}, 400),
-                 ({"name": "b", "engine": "kiro", "skills": ["없는스킬"]}, 400), ({"name": "README"}, 400)]
-        for body, expected in cases:
-            with self.subTest(body=body):
-                self.assertEqual(self.call("POST", "/api/agents", body)[0], expected)
-        self.assertEqual(self.call("PUT", "/api/agents/" + urllib.request.quote("없음"), {"engine": "kiro"})[0], 404)
-
-    def test_task_can_switch_engine_and_reports_unknown_agent(self):
-        (self.root / "tasks" / "엔진바꿈.md").write_text("---\nagent: 기본_도우미\nengine: claude\n---\n일\n",
-                                                       encoding="utf-8")
-        (self.root / "tasks" / "없는에이전트.md").write_text("---\nagent: 없는이\n---\n일\n", encoding="utf-8")
-        for name in ("엔진바꿈", "없는에이전트"):
-            self.call("POST", f"/api/tasks/{urllib.request.quote(name)}/run")
-            self.wait_for(lambda e: e["type"] == "task" and e["state"] == "done" and e["name"] == name)
-        self.assertEqual(ENGINES_USED, ["claude"])
-        outbox = self.root / "workspace" / "outbox"
-        read = lambda task: next(outbox.glob(f"*_{task}.md")).read_text(encoding="utf-8")
-        self.assertIn("- 엔진: claude", read("엔진바꿈"))
-        self.assertIn("오류: 에이전트 '없는이'이 없습니다", read("없는에이전트"))
-
-
-    # ---- 대화 이어 가기 ----
-
-    def last_preamble(self):
-        return [e for e in self.platform.log.events if e["type"] == "preamble"][-1]
-
-    def test_conversation_continues_on_another_engine(self):
-        conversation = self.new_conversation(engine="kiro")
-        self.assertEqual(self.ask(conversation, "발표안내.md를 기억해"), "받음: 발표안내.md를 기억해")
-        status, body = self.call("PATCH", f"/api/conversations/{conversation}", {"engine": "claude"})
-        self.assertEqual((status, body["engine"]), (200, "claude"))
-        self.assertIn("엔진을 kiro에서 claude로 바꿨다", body["messages"][-1]["text"])
-        self.assertEqual(self.ask(conversation, "이어서"), "받음: 이어서")
-        note = self.last_preamble()
-        self.assertEqual(note["history"], 2)
-        self.assertIn("[사용자] 발표안내.md를 기억해", note["text"])
-        self.assertIn("[에이전트] 받음: 발표안내.md를 기억해", note["text"])
-        self.assertNotIn("엔진을 kiro에서", note["text"])     # 플랫폼의 알림은 앞의 대화에 넣지 않는다
-        self.assertEqual(ENGINES_USED, ["kiro", "claude"])
-
-    def test_new_conversation_starts_without_history(self):
-        self.ask(self.new_conversation(), "하나")
-        self.ask(self.new_conversation(), "둘")
-        self.assertEqual(self.last_preamble()["history"], 0)
-        self.assertNotIn("지금까지의 대화", self.last_preamble()["text"])
-
-    def test_switching_back_reopens_the_session_with_that_history(self):
-        write_agent(self.root, "메모_정리", role="메모만.")
-        first = self.new_conversation()
-        self.ask(first, "기본에게")
-        self.ask(first, "또")                                # 같은 대화는 세션을 그대로 쓴다
-        self.assertEqual(len([e for e in self.platform.log.events if e["type"] == "preamble"]), 1)
-        second = self.new_conversation(agent="메모_정리")
-        self.ask(second, "메모에게")
-        self.assertEqual(self.last_preamble()["history"], 0)
-        self.ask(first, "다시 기본에게")
-        note = self.last_preamble()
-        self.assertEqual((note["agent"], note["history"]), ("기본_도우미", 4))
-        self.assertNotIn("메모에게", note["text"])
-
-
-    # ---- 대화 목록, 기록 파일, 지우기 ----
-
-    def test_conversations_are_saved_as_files_and_listed(self):
-        first = self.new_conversation()
-        self.ask(first, "발표 준비 메모를 정리해 줘\n둘째 줄")
-        second = self.new_conversation(engine="claude")
-        status, body = self.call("GET", "/api/conversations")
-        self.assertEqual(status, 200)
-        self.assertEqual([c["id"] for c in body["conversations"]][:2], [second, first])
-        listed = {c["id"]: c for c in body["conversations"]}
-        self.assertEqual((listed[first]["title"], listed[first]["messages"]), ("발표 준비 메모를 정리해 줘", 2))
-        self.assertEqual((listed[second]["title"], listed[second]["engine"]), ("", "claude"))
-        self.assertTrue((self.root / "conversations" / f"{first}.json").is_file())
-        status, body = self.call("GET", f"/api/conversations/{first}")
-        roles = [m["role"] for m in body["messages"]]
-        self.assertEqual(roles, ["user", "preamble", "agent"])
-        agent = body["messages"][-1]
-        self.assertEqual((agent["text"], agent["engine"], agent["stopLabel"]), ("받음: 발표 준비 메모를 정리해 줘\n둘째 줄", "kiro", "끝"))
-
-    def test_tools_and_refusals_are_kept_in_the_record(self):
-        conversation = self.new_conversation()
-        self.send(conversation, "도구 써 줘")
-        card = self.wait_for(lambda e: e["type"] == "permission")
-        self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
-        self.wait_for(lambda e: e["type"] == "done")
-        agent = self.call("GET", f"/api/conversations/{conversation}")[1]["messages"][-1]
-        # 가짜 엔진은 Kiro처럼 시작 알림에 제목만 보내고, 명령은 허락 요청에 담는다.
-        self.assertEqual((agent["tools"], agent["refused"]), (["명령 실행 Running: date"], ["명령 실행 date"]))
-
-    def test_delete_conversation(self):
-        conversation = self.new_conversation()
-        self.ask(conversation, "하나")
-        self.assertIsNotNone(self.platform.client)
-        status, _ = self.call("DELETE", f"/api/conversations/{conversation}")
-        self.assertEqual(status, 200)
-        self.assertIsNone(self.platform.client)            # 그 대화의 엔진 세션도 닫는다
-        self.assertEqual(self.call("GET", f"/api/conversations/{conversation}")[0], 404)
-        self.assertEqual(self.call("DELETE", f"/api/conversations/{conversation}")[0], 404)
-        self.assertFalse((self.root / "conversations" / f"{conversation}.json").exists())
-        self.assertEqual(self.call("GET", "/api/conversations")[1]["conversations"], [])
-
-    def test_busy_conversation_cannot_be_deleted_or_changed(self):
-        busy, other = self.new_conversation(), self.new_conversation()
-        self.send(busy, "도구 써 줘")
-        card = self.wait_for(lambda e: e["type"] == "permission")
-        self.assertEqual(self.call("DELETE", f"/api/conversations/{busy}")[0], 409)
-        self.assertEqual(self.call("PATCH", f"/api/conversations/{busy}", {"engine": "claude"})[0], 409)
-        self.assertEqual(self.call("POST", f"/api/conversations/{other}/prompt", {"text": "끼어들기"})[0], 409)
-        self.assertEqual(self.call("DELETE", f"/api/conversations/{other}")[0], 200)   # 일하지 않는 대화는 지운다
-        self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
-        self.wait_for(lambda e: e["type"] == "done")
-        self.assertEqual(self.call("DELETE", f"/api/conversations/{busy}")[0], 200)
-
-    def test_state_has_the_live_turn_for_a_page_opened_midway(self):
-        conversation = self.new_conversation()
-        self.send(conversation, "도구 써 줘")
-        card = self.wait_for(lambda e: e["type"] == "permission")
-        status, state = self.call("GET", "/api/state")
-        self.assertEqual((state["state"], state["conversation"]), ("busy", conversation))
-        types = [e["type"] for e in state["live"]]
-        self.assertIn("permission", types)
-        self.assertNotIn("user", types)                    # 질문은 대화 기록에 이미 있다
-        self.assertEqual(state["last"], len(self.platform.log.events))
-        self.call("POST", f"/api/permissions/{card['id']}", {"allow": True})
-        self.wait_for(lambda e: e["type"] == "done")
-        self.assertEqual(self.call("GET", "/api/state")[1]["live"], [])
-
-    def test_platform_keeps_working_when_the_record_cannot_be_saved(self):
-        # Windows에서는 다른 프로그램이 파일을 잡고 있으면 저장이 실패할 수 있다. 그래도 답을 끝내고 다음 질문을 받는다.
-        conversation = self.new_conversation()
-        real_append = self.platform.store.append
-
-        def append(conversation_id, message):
-            if message["role"] == "agent":
-                raise PermissionError(13, "다른 프로그램이 파일을 쓰는 중")
-            return real_append(conversation_id, message)
-
-        with mock.patch.object(self.platform.store, "append", append):
-            self.assertEqual(self.ask(conversation, "하나"), "받음: 하나")
-        self.assertEqual(self.platform.state, "ready")
-        self.assertEqual(self.ask(conversation, "둘"), "받음: 둘")
-
-    def test_conversation_continues_after_restart(self):
-        conversation = self.new_conversation()
-        self.ask(conversation, "어제 한 이야기")
-        # 대시보드를 껐다 켠 것과 같다: 같은 폴더로 플랫폼을 새로 만든다.
-        restarted = dashboard.Platform(self.root, client_factory=fake_factory, status_checker=lambda name: True,
-                                       install_checker=lambda engine: True)
-        self.addCleanup(lambda: restarted.client and restarted.client.close())
-        self.assertEqual([c["id"] for c in restarted.conversations()["conversations"]], [conversation])
-        restarted.prompt(conversation, "오늘 이어서")
-        self.wait_for(lambda e: e["type"] == "done", log=restarted.log)
-        note = self.wait_for(lambda e: e["type"] == "preamble", log=restarted.log)
-        self.assertEqual(note["history"], 2)
-        self.assertIn("[사용자] 어제 한 이야기", note["text"])
-
-    def test_events_tell_a_stale_page_to_start_over(self):
-        status, body = self.call("GET", "/api/events?after=500")   # 서버를 다시 켜기 전의 번호
-        self.assertEqual((status, body["events"]), (200, []))
-        self.assertEqual(body["epoch"], self.platform.log.epoch)
-
-
-    # ---- 파일 올리기 ----
-
-    PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 16
-
-    def upload(self, name, data):
-        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/uploads?name={urllib.request.quote(name)}",
-                                         data=data, method="POST", headers={"Content-Type": "application/octet-stream"})
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                return response.status, json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            with error:
-                return error.code, json.loads(error.read())
-
-    def test_upload_saves_into_inbox_and_serves_it_sandboxed(self):
-        status, info = self.upload("메모 사진.png", self.PNG)
-        self.assertEqual((status, info["path"], info["type"], info["size"]),
-                         (201, "inbox/메모_사진.png", "image/png", len(self.PNG)))
-        self.assertEqual((self.root / "workspace" / "inbox" / "메모_사진.png").read_bytes(), self.PNG)
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/inbox/" + urllib.request.quote("메모_사진.png")) as response:
-            self.assertEqual(response.headers["Content-Security-Policy"], "sandbox")
-            self.assertEqual(response.headers["Content-Type"], "image/png")
-            self.assertEqual(response.read(), self.PNG)
-
-    def test_upload_name_is_cleaned_and_never_overwrites(self):
-        first = self.upload("../../engines/base.py", b"a")[1]
-        second = self.upload("base.py", b"b")[1]
-        hidden = self.upload(".env", b"c")[1]
-        nfd = self.upload(unicodedata.normalize("NFD", "보고서.csv"), b"d")[1]   # macOS가 보내는 한글 이름의 꼴
-        self.assertEqual([first["path"], second["path"], hidden["path"], nfd["path"]],
-                         ["inbox/base.py", "inbox/base-2.py", "inbox/env", "inbox/보고서.csv"])
-        self.assertEqual((self.root / "workspace" / "inbox" / "base.py").read_bytes(), b"a")
-        self.assertEqual(self.call("GET", "/inbox/..%2F..%2Fcustom%2Frules.py")[0], 404)
-
-    def test_too_large_upload_is_refused(self):
-        with mock.patch.object(dashboard, "UPLOAD_BYTES", 10):
-            status, body = self.upload("큰.png", b"0" * 11)
-        self.assertEqual(status, 413)
-        self.assertIn("너무 큽니다", body["error"])
-        self.assertFalse((self.root / "workspace" / "inbox" / "큰.png").exists())
-
-    def test_prompt_with_files_goes_in_the_engines_way_and_is_recorded(self):
-        photo = self.upload("메모.png", self.PNG)[1]["path"]
-        table = self.upload("표.csv", "a,b\n".encode())[1]["path"]
-        conversation = self.new_conversation()
-        start = len(self.platform.log.events)
-        status, _ = self.call("POST", f"/api/conversations/{conversation}/prompt",
-                              {"text": "정리해 줘", "files": [photo, table]})
-        self.assertEqual(status, 202)
-        self.wait_for(lambda e: e["type"] == "done" and e["seq"] > start)
-        answer = "".join(e["text"] for e in self.platform.log.events[start:] if e["type"] == "text")
-        self.assertIn("[올린 파일]", answer)                              # 질문 아래에 경로가 붙는다
-        self.assertIn("- inbox/메모.png\n- inbox/표.csv", answer)
-        self.assertTrue(answer.endswith("/ 블록 image:image/png, resource_link:표.csv"))   # 사진은 그림, 표는 경로
-        self.assertEqual(self.wait_for(lambda e: e["type"] == "user")["files"], [photo, table])
-        stored = self.call("GET", f"/api/conversations/{conversation}")[1]["messages"][0]
-        self.assertEqual((stored["text"], stored["files"]), ("정리해 줘", [photo, table]))
-
-    def test_prompt_with_only_a_file_and_with_unknown_files(self):
-        photo = self.upload("내준비메모.png", self.PNG)[1]["path"]
-        conversation = self.new_conversation()
-        prompt = f"/api/conversations/{conversation}/prompt"
-        self.assertEqual(self.call("POST", prompt, {"text": "a", "files": ["inbox/없는.png"]})[0], 400)
-        self.assertEqual(self.call("POST", prompt, {"text": "a", "files": ["../custom/rules.py"]})[0], 400)
-        self.assertEqual(self.call("POST", prompt, {"text": "a", "files": "inbox/내준비메모.png"})[0], 400)
-        self.assertEqual(self.call("POST", prompt, {"files": [photo]})[0], 202)
-        self.wait_for(lambda e: e["type"] == "done")
-        self.assertEqual(self.call("GET", "/api/conversations")[1]["conversations"][0]["title"], "내준비메모.png")
-
-
-    # ---- 엔진마다 다른 거절을 하나의 결과로 ----
-
-    def test_refusal_on_codex_style_engine_still_ends_as_done(self):
-        write_agent(self.root, "코덱스", engine="codex")
-        with mock.patch.dict(os.environ, {"FAKE_STYLE": "codex"}):
-            self.send(self.new_conversation(agent="코덱스"), "도구 써 줘")
-            card = self.wait_for(lambda e: e["type"] == "permission")
-            self.call("POST", f"/api/permissions/{card['id']}", {"allow": False})
-            done = self.wait_for(lambda e: e["type"] == "done")
-        notice = self.wait_for(lambda e: e["type"] == "notice")
-        self.assertIn("이어서 하게 했다", notice["text"])
-        self.assertEqual((done["stop"], done["stopLabel"], done["refused"]), ("done", "끝", 1))
-
-    def test_unattended_result_file_has_the_same_shape_for_every_engine(self):
-        write_agent(self.root, "코덱스", engine="codex")
-        with mock.patch.dict(os.environ, {"FAKE_STYLE": "codex"}):
-            codex = runner.run_task("코덱스", "도구 써 줘", workspace=self.root / "workspace",
-                                    client_factory=fake_factory, custom=self.root / "custom")
-        kiro = runner.run_task("기본_도우미", "도구 써 줘", workspace=self.root / "workspace",
-                               client_factory=fake_factory, custom=self.root / "custom")
-        for result in (codex, kiro):
-            text = result.path.read_text(encoding="utf-8")
-            self.assertIn("- 끝난 까닭: 끝", text)
-            self.assertIn("- 거절한 도구: 명령 실행 date", text)
-        self.assertIn("- 플랫폼 알림: 엔진이 거절 뒤 차례를 멈춰서", codex.path.read_text(encoding="utf-8"))
-
-
-class TaskFileTest(unittest.TestCase):
-    def test_load_tasks_reads_header_and_body(self):
-        folder = pathlib.Path(tempfile.mkdtemp())
-        (folder / "a.md").write_text("---\nagent: 메모_정리\nengine: codex\ntime: 07:30\n---\n할 일\n", encoding="utf-8")
-        (folder / "b.md").write_text("머리 없는 일\n", encoding="utf-8")
-        (folder / "c.md").write_text("---\ntime: 7시\n---\n시각이 틀린 일\n", encoding="utf-8")
-        tasks = {t["name"]: t for t in runner.load_tasks(folder)}
-        self.assertEqual(tasks["a"], {"name": "a", "agent": "메모_정리", "engine": "codex", "time": "07:30",
-                                      "prompt": "할 일"})
-        self.assertEqual((tasks["b"]["agent"], tasks["b"]["engine"]), ("기본_도우미", ""))
-        self.assertEqual(tasks["b"]["time"], "")
-        self.assertEqual(tasks["c"]["time"], "")
-
-    def test_is_due(self):
-        task = {"time": "07:30"}
-        today = datetime.date(2026, 10, 21)
-        at = lambda h, m: datetime.datetime(2026, 10, 21, h, m)
-        self.assertFalse(runner.is_due(task, at(7, 29), None))
-        self.assertTrue(runner.is_due(task, at(7, 30), None))
-        self.assertFalse(runner.is_due(task, at(7, 31), today))
-        self.assertFalse(runner.is_due({"time": ""}, at(7, 30), None))
 
 
 if __name__ == "__main__":

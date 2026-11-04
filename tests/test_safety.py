@@ -86,9 +86,9 @@ class SafetyTest(unittest.TestCase):
             with self.subTest(file=name):
                 self.assertFalse((ROOT / "workspace" / name).exists())
 
-    def test_secrets_and_homes_are_ignored(self):
+    def test_secrets_homes_and_conversations_are_ignored(self):
         ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").split()
-        for entry in (".homes/", ".env", "workspace/outbox/"):
+        for entry in (".homes/", ".env", "conversations/"):
             self.assertIn(entry, ignored)
 
 

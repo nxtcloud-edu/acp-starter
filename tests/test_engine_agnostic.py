@@ -2,7 +2,7 @@
 
 규칙: 엔진(Kiro, Claude, Codex)마다 다른 것은 엔진 층(engines/)에만 둔다.
 플랫폼 층과 내가 바꾸는 파일은 엔진 이름을 코드에 적지 않는다.
-그래야 에이전트의 엔진을 바꿔도 플랫폼 기능이 그대로 돈다.
+그래야 엔진을 바꿔도 플랫폼 기능이 그대로 돈다.
 
 실행: python -m unittest discover tests
 """
@@ -18,8 +18,8 @@ import engines  # noqa: E402
 from engines import AcpEngine  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
-PLATFORM_FILES = ["custom_loader.py", "conversations.py", "dashboard.py", "runner.py", "run_once.py", "chat.py",
-                  "app/static/app.js", "custom/rules.py", "custom/deliver.py"]
+PLATFORM_FILES = ["custom_loader.py", "conversations.py", "dashboard.py", "chat.py",
+                  "app/static/app.js", "app/static/index.html", "custom/rules.py"]
 
 
 class EngineAgnosticTest(unittest.TestCase):

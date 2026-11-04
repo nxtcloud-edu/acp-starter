@@ -2,13 +2,13 @@
 
 이 파일은 "플랫폼 층"이다. 대화 기록은 엔진이 아니라 플랫폼이 갖는다.
 그래서 엔진을 바꿔도, 대시보드를 껐다 켜도 같은 대화를 이어 간다.
-대화 하나는 에이전트 하나와 나눈다. 엔진은 대화 중간에 바꿀 수 있다.
+화면은 늘 가장 새 대화 하나를 보인다. "새 대화"를 누르면 새 파일을 만든다. 앞의 파일은 지우지 않는다.
 
 대화 파일의 꼴:
-  {"id", "title", "agent", "engine", "created", "updated", "messages": [메시지, ...]}
+  {"id", "engine", "created", "updated", "messages": [메시지, ...]}
 
 메시지의 role과 칸(모두 text와 at이 있다):
-  user      사람의 질문. 올린 파일이 있으면 files(작업 폴더 기준 경로. 예: inbox/메모.jpg)
+  user      사람의 질문
   agent     에이전트의 답. engine, stop, stopLabel, usage, tools, refused, notices
   note      플랫폼이 남긴 알림. 예: 엔진을 바꿨다. error가 true이면 오류
   preamble  엔진 세션을 새로 열 때 첫 질문 앞에 붙인 플랫폼 안내. engine, history(넣은 앞의 대화 수)
@@ -24,9 +24,8 @@ import time
 
 ROOT = pathlib.Path(__file__).parent
 FOLDER = ROOT / "conversations"
-ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")   # 만든 때와 무작위 네 글자. 예: 20261021-153012-a1b2
-TITLE_CHARS = 40
-TALK = ("user", "agent")                        # 사람과 에이전트가 나눈 말. 목록의 메시지 수와 앞의 대화에 쓴다
+# 만든 때(밀리초까지)와 무작위 네 글자. 예: 20261021-153012345-a1b2. 밀리초가 없는 앞의 꼴도 읽는다
+ID = re.compile(r"\d{8}-\d{6}(\d{3})?-[0-9a-f]{4}")
 REPLACE_TRIES = 5                               # 바꿔 넣기를 해 보는 횟수. Windows에서는 다른 프로그램이 파일을 잡으면 잠깐 실패한다
 
 
@@ -39,21 +38,8 @@ class ConversationError(Exception):
 
 
 def _now():
-    """지금 시각. 같은 초에 바뀐 대화도 목록의 순서가 정해지게 밀리초까지 쓴다. 예: 2026-10-21 15:30:12.345"""
+    """지금 시각. 예: 2026-10-21 15:30:12.345"""
     return datetime.datetime.now().isoformat(sep=" ", timespec="milliseconds")
-
-
-def title_of(text):
-    """첫 질문의 첫 줄로 대화의 제목을 만든다."""
-    line = next((l.strip() for l in (text or "").splitlines() if l.strip()), "")
-    return line if len(line) <= TITLE_CHARS else line[:TITLE_CHARS] + "…"
-
-
-def summary(conversation):
-    """목록에 보일 칸만 고른다."""
-    fields = ("id", "title", "agent", "engine", "created", "updated")
-    talk = [m for m in conversation["messages"] if m["role"] in TALK]
-    return {**{key: conversation[key] for key in fields}, "messages": len(talk)}
 
 
 class ConversationStore:
@@ -94,24 +80,49 @@ class ConversationStore:
             except (OSError, json.JSONDecodeError) as error:
                 raise ConversationError(f"대화 파일을 읽지 못했습니다: {error}", 500)
 
-    def create(self, agent, engine):
-        now = datetime.datetime.now()
-        conversation = {"id": f"{now:%Y%m%d-%H%M%S}-{secrets.token_hex(2)}", "title": "",
-                        "agent": agent, "engine": engine, "created": _now(), "updated": _now(), "messages": []}
+    def _new_id(self):
+        """새 번호. 이름 순서가 만든 순서가 되게, 가장 새 번호보다 뒤에 오는 번호를 만든다."""
+        newest = max((p.stem for p in self.folder.glob("*.json") if ID.fullmatch(p.stem)), default="")
+        for _ in range(100):
+            now = datetime.datetime.now()
+            stamp = f"{now:%Y%m%d-%H%M%S}{now.microsecond // 1000:03d}"
+            if stamp > newest[:len(stamp)]:
+                break
+            time.sleep(0.002)   # 같은 밀리초에 만든 대화가 있다
+        return f"{stamp}-{secrets.token_hex(2)}"
+
+    def create(self, engine):
         with self.lock:
+            conversation = {"id": self._new_id(), "engine": engine,
+                            "created": _now(), "updated": _now(), "messages": []}
             self._save(conversation)
         return conversation
 
+    def latest(self):
+        """가장 새로 만든 대화. 번호가 만든 때로 시작하므로 이름 순서가 만든 순서다. 없으면 None."""
+        with self.lock:
+            paths = sorted(self.folder.glob("*.json")) if self.folder.is_dir() else []
+            for path in reversed(paths):
+                if not ID.fullmatch(path.stem):
+                    continue
+                try:
+                    return self.load(path.stem)
+                except ConversationError:
+                    continue   # 깨진 파일은 건너뛴다
+        return None
+
+    def current(self, engine):
+        """지금 대화. 대화가 하나도 없으면 그 엔진으로 새로 만든다."""
+        with self.lock:
+            return self.latest() or self.create(engine)
+
     def append(self, conversation_id, message):
-        """메시지 하나를 더한다. 첫 질문이면 제목도 정한다."""
+        """메시지 하나를 더한다."""
         with self.lock:
             conversation = self.load(conversation_id)
             message = {**message, "at": _now()}
             conversation["messages"].append(message)
             conversation["updated"] = message["at"]
-            if not conversation["title"] and message["role"] == "user":
-                names = " ".join(path.rsplit("/", 1)[-1] for path in message.get("files", []))
-                conversation["title"] = title_of(message.get("text")) or title_of(names)
             self._save(conversation)
             return conversation
 
@@ -124,22 +135,3 @@ class ConversationStore:
             conversation["updated"] = _now()
             self._save(conversation)
             return conversation
-
-    def delete(self, conversation_id):
-        path = self._path(conversation_id)
-        with self.lock:
-            if not path.is_file():
-                raise ConversationError("그런 대화가 없습니다.")
-            path.unlink()
-
-    def listing(self):
-        """대화 목록. 최근에 바뀐 대화가 위에 온다. 읽지 못하는 파일은 건너뛴다."""
-        found = []
-        with self.lock:
-            for path in self.folder.glob("*.json") if self.folder.is_dir() else []:
-                try:
-                    found.append(summary(json.loads(path.read_text(encoding="utf-8"))))
-                except (OSError, json.JSONDecodeError, KeyError, TypeError):
-                    continue
-        found.sort(key=lambda c: (c["updated"], c["id"]), reverse=True)
-        return found

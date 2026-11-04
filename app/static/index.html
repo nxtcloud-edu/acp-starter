@@ -7,125 +7,37 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <!-- 이름, 한 줄 소개, 색은 custom/brand.json에서 온다. 배치와 모양은 이 파일과 style.css에서 바꾼다.
-       왼쪽은 메뉴, 오른쪽은 고른 메뉴의 화면이다. 메뉴를 더하려면 nav에 버튼을, main에 view를 하나씩 더한다. -->
-  <header>
+  <!-- 화면은 셋으로 나뉜다. 위: 앱 이름과 한 줄 소개(custom/brand.json). 왼쪽: 엔진. 오른쪽: 대화.
+       색은 style.css 맨 위의 토큰에서 바꾼다. 동작은 app.js에 있다. -->
+  <header class="top">
     <div>
       <h1 id="brand-name">내 에이전트 플랫폼</h1>
-      <p id="brand-tagline"></p>
+      <p id="brand-tagline" class="muted"></p>
     </div>
-    <button id="status-pill" class="pill" type="button" title="대화로 가기">대기 중</button>
+    <span id="status" class="pill">대기 중</span>
   </header>
 
-  <div class="frame">
-    <nav id="nav">
-      <button type="button" data-view="chat">대화 <span id="badge-chat" class="count" hidden></span></button>
-      <button type="button" data-view="agents">에이전트</button>
-      <button type="button" data-view="skills">스킬</button>
-      <button type="button" data-view="tasks">일</button>
-      <button type="button" data-view="outbox">결과함</button>
-    </nav>
+  <main class="layout">
+    <!-- 엔진: 로그인 상태, 로그인, 연결 -->
+    <section class="panel">
+      <h2>엔진</h2>
+      <p class="muted small">로그인한 엔진을 골라 연결합니다. 엔진을 바꿔도 대화는 이어집니다.</p>
+      <div id="engine-list" class="engine-list"></div>
+    </section>
 
-    <main>
-      <div id="banner" class="banner" hidden></div>
-
-      <!-- 대화: 왼쪽은 대화 목록, 가운데는 고른 대화, 오른쪽은 그 대화의 결과. 대화마다 에이전트 하나와 이야기한다 -->
-      <section id="view-chat" class="view">
-        <div class="view-head">
-          <div>
-            <h2>대화</h2>
-            <p class="muted">대화마다 에이전트 하나와 이야기한다. 기록은 <code>conversations/</code>에 남아서 엔진을 바꾸거나 다시 켜도 이어 간다.</p>
-          </div>
-          <div class="head-actions"><button type="button" id="new-chat">+ 새 대화</button></div>
-        </div>
-        <div id="chat-split" class="split chat-split">
-          <ul id="chat-list" class="pick-list"></ul>
-          <div class="chat">
-            <div id="chat-head" class="chat-head"></div>
-            <div id="log"></div>
-            <form id="composer">
-              <p id="composer-note" class="muted small" hidden></p>
-              <!-- 올린 파일. 보낼 때 질문에 붙는다. 파일은 workspace/inbox/에 있다 -->
-              <div id="tray" class="tray" hidden></div>
-              <div class="composer-row">
-                <button type="button" id="attach" class="ghost attach" title="파일이나 사진 올리기. 끌어 놓거나 붙여 넣어도 된다">+</button>
-                <input type="file" id="file-input" multiple hidden>
-                <textarea id="text" rows="2" placeholder="에이전트에게 맡길 일을 적는다. Enter로 보내고, Shift+Enter로 줄을 바꾼다."></textarea>
-                <button type="submit" id="send">보내기</button>
-              </div>
-            </form>
-          </div>
-          <!-- 이 대화의 결과: 대화를 연 뒤 workspace/outbox/에 생기거나 바뀐 파일. 차례가 끝나면 가장 새것을 보인다 -->
-          <aside id="results" class="results">
-            <div class="results-head">
-              <b>이 대화의 결과</b>
-              <select id="result-pick" hidden></select>
-            </div>
-            <div id="result-detail" class="detail"></div>
-          </aside>
-        </div>
-      </section>
-
-      <!-- 에이전트: 에이전트와 돌릴 엔진을 골라 새 대화를 시작한다. 지금 대화의 엔진을 바꾸는 곳, 에이전트를 만들고 고치는 곳도 여기다 -->
-      <section id="view-agents" class="view" hidden>
-        <div class="view-head">
-          <div>
-            <h2>에이전트</h2>
-            <p class="muted">에이전트와 돌릴 엔진을 골라 대화를 시작한다. 에이전트 파일은 <code>custom/agents/</code>에 있다.</p>
-          </div>
-          <div class="head-actions"><button type="button" id="new-agent">+ 새 에이전트</button></div>
-        </div>
-        <div class="split">
-          <ul id="agent-list" class="pick-list"></ul>
-          <div id="agent-detail" class="detail"></div>
-        </div>
-      </section>
-
-      <!-- 스킬: workspace/skills/의 스킬 -->
-      <section id="view-skills" class="view" hidden>
-        <div class="view-head">
-          <div>
-            <h2>스킬</h2>
-            <p class="muted">에이전트가 따르는 절차다. <code>workspace/skills/</code>에 폴더를 더하면 늘어난다.</p>
-          </div>
-        </div>
-        <div class="split">
-          <ul id="skill-list" class="pick-list"></ul>
-          <div id="skill-detail" class="detail"></div>
-        </div>
-      </section>
-
-      <!-- 일: tasks/의 일 -->
-      <section id="view-tasks" class="view" hidden>
-        <div class="view-head">
-          <div>
-            <h2>일</h2>
-            <p class="muted">사람 없이 맡기는 일이다. <code>tasks/</code>에 파일을 더하면 늘어난다. 시각이 있으면 대시보드가 켜져 있는 동안 매일 돈다.</p>
-          </div>
-          <div class="head-actions"><button type="button" id="reload-tasks" class="ghost">새로 읽기</button></div>
-        </div>
-        <div class="split">
-          <ul id="task-list" class="pick-list"></ul>
-          <div id="task-detail" class="detail"></div>
-        </div>
-      </section>
-
-      <!-- 결과함: workspace/outbox/의 결과 파일 -->
-      <section id="view-outbox" class="view" hidden>
-        <div class="view-head">
-          <div>
-            <h2>결과함</h2>
-            <p class="muted">일과 스킬이 만든 파일이다. <code>workspace/outbox/</code>에 있다.</p>
-          </div>
-          <div class="head-actions"><button type="button" id="reload-outbox" class="ghost">새로 읽기</button></div>
-        </div>
-        <div class="split">
-          <ul id="outbox-list" class="pick-list"></ul>
-          <div id="outbox-detail" class="detail"></div>
-        </div>
-      </section>
-    </main>
-  </div>
+    <!-- 대화: 기록, 허락 카드, 입력칸 -->
+    <section class="panel chat">
+      <div class="chat-head">
+        <h2>대화</h2>
+        <button type="button" id="new-chat" class="ghost">새 대화</button>
+      </div>
+      <div id="log" class="log"></div>
+      <form id="composer" class="composer">
+        <textarea id="text" rows="2" placeholder="맡길 일을 적어 주세요. Enter로 보내고, Shift+Enter로 줄을 바꿉니다."></textarea>
+        <button type="submit" id="send">보내기</button>
+      </form>
+    </section>
+  </main>
 
   <script src="/static/app.js"></script>
 </body>
