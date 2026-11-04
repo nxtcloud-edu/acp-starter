@@ -1,104 +1,20 @@
 # acp-starter
 
-내 일을 위한 AI 에이전트 플랫폼의 출발점이다. 내가 만든 에이전트를 ACP(Agent Client Protocol)로 Kiro, Claude, Codex 가운데 하나에 실어 돌리고, 각자 가진 계정이나 구독으로 쓴다. 브라우저로 여는 작은 대시보드와 터미널 예제가 함께 들어 있다.
+내 에이전트 플랫폼 앱의 출발점입니다. 브라우저로 여는 작은 앱에서 엔진(Claude, Codex, Kiro)과 대화합니다. 엔진은 ACP(Agent Client Protocol)로 연결하고, 각자 가진 계정이나 구독으로 씁니다.
 
-처음 열면 기본 기능만 있는 빈 플랫폼이다. 에이전트를 만들고, 엔진에 로그인하고, 대화하고, 스킬을 쓰고, 허락하고, 일을 정해진 시각에 돌리고, 결과를 모아 본다. 그다음에 이 레포를 포크해서 내 업무 전용 플랫폼으로 키운다. 어디를 바꿀 수 있는지는 [만들_곳.md](만들_곳.md)에 있다. 최종 과제 안내는 [안내/](안내/)에 있다.
+처음 받은 앱은 아주 기본만 있습니다. 엔진에 로그인하고, 연결하고, 대화하고, 엔진이 도구(파일 쓰기, 명령, 인터넷)를 쓰려 할 때 허락을 묻습니다. 여기에 이름을 붙이고, 내 색감으로 꾸미고, 필요한 기능을 하나씩 붙여서 내 앱으로 키웁니다.
 
-## 흐름
+## 처음 30분
 
-```
-사용자의 입력 (화면, 일 파일, 터미널)
-   │   플랫폼의 형식: 에이전트, 질문, 올린 파일, 플랫폼 안내(업무, 역할, 스킬, 도구 규칙, 앞의 대화)
-   ▼
-에이전트 플랫폼            custom_loader.py, dashboard.py, runner.py   ← 엔진 이름을 모른다
-   │   engines.make(엔진 이름)
-   ▼
-엔진 어댑터                engines/kiro.py, claude.py, codex.py (공통은 engines/base.py)
-   │   보내기: 그 엔진에 맞는 형식으로 바꾼다(샌드박스, 세션 설정, 안전 모드, 질문, 올린 파일, 허락 답)
-   ▼
-엔진                       kiro-cli, claude-agent-acp, codex-acp
-   │   엔진마다 다른 형태의 답(답 조각, 도구 요청, 쓴 양, 끝난 까닭)
-   ▼
-엔진 어댑터                받기: 하나의 형식으로 포장한다(ToolRequest, TurnResult)
-   ▼
-에이전트 플랫폼            화면 표시, 허락 규칙(custom/rules.py), 결과 파일, 보내기(custom/deliver.py), 대화 기록
-```
-
-엔진이 무엇이든 플랫폼이 받는 것은 같은 꼴이다.
-
-| 형식 | 뜻 | 칸 |
-|---|---|---|
-| `ToolRequest` | 에이전트가 쓰려는 도구 하나 | `kind`(종류), `command`(명령), `path`(작업 폴더 기준 파일), `url`(인터넷 주소), `label`(화면 이름), `detail`(세부) |
-| `TurnResult` | 한 차례의 결과 | `stop`(끝난 까닭: `done`, `limit`, `refusal`, `cancelled`), `text`(답), `segments`(도구 사이사이의 말), `tools`(쓴 도구), `refused`(거절한 도구), `notices`(플랫폼 알림), `usage`(쓴 양) |
-
-## 에이전트와 엔진
-
-| 이름 | 뜻 | 어디에 있나 |
-|---|---|---|
-| 에이전트 | 내가 만드는 것. 이름, 역할, 쓸 스킬, 기본 엔진 | `custom/agents/<이름>.md` |
-| 엔진 | 에이전트를 실제로 돌리는 ACP 프로그램. 생각하고 도구를 쓰는 쪽 | `engines/<이름>.py`(`kiro`, `claude`, `codex`) |
-
-에이전트의 역할, 업무(`custom/업무.md`), 스킬 목록, 도구 규칙, 앞의 대화는 플랫폼이 엔진에게 보낸다. 허락 규칙, 일 실행, 결과함, 대화 기록도 플랫폼이 맡는다. 그래서 **엔진을 바꿔도 플랫폼 기능은 그대로 돈다.** 에이전트의 `engine:` 한 줄을 바꾸거나, 대시보드에서 대화의 엔진을 바꾸면 된다.
-
-코드도 이 구분대로 나뉜다.
-
-| 층 | 파일 | 하는 일 |
-|---|---|---|
-| 엔진 층 | `engines/`, `login.py` | 엔진마다 다른 것(실행 명령, 샌드박스, 안전 모드, 로그인, 메시지의 모양)을 맞춘다 |
-| 플랫폼 층 | `custom_loader.py`, `conversations.py`, `dashboard.py`, `runner.py`, `app/static/` | 에이전트, 플랫폼 안내, 허락, 일, 결과, 대화 기록. 엔진 이름을 쓰지 않는다(`tests/test_engine_agnostic.py`가 확인한다) |
-| 내 것 | `custom/`, `workspace/skills/`, `workspace/자료/`, `tasks/` | 내 업무에 맞게 바꾸는 곳 |
-
-엔진만이 가진 기능(Kiro의 에이전트 설정, Claude의 `CLAUDE.md`와 스킬, Codex의 `AGENTS.md`, 스킬, 플러그인, 기억)에는 기대지 않는다. 그런 곳에 넣은 지시는 엔진을 바꾸면 사라지기 때문이다. 작업 폴더(`workspace/`)에도 엔진만의 파일을 두지 않는다.
-
-## 엔진마다 다른 점과 플랫폼이 받는 꼴
-
-2026-10-21에 세 엔진(Kiro CLI 2.29.1, claude-agent-acp 0.94.0, codex-acp 2.2.2)을 실제로 돌려 확인했다. 맞추는 코드는 `engines/`에 있다.
-
-| 다른 점 | Kiro | Claude | Codex | 플랫폼이 받는 꼴 |
-|---|---|---|---|---|
-| 역할과 지침 | 엔진 설정의 역할 문장(`prompt`)을 비운다 | `CLAUDE.md`를 읽지 않게 한다(`settingSources: []`) | `AGENTS.md`를 읽지 않게 한다(`project_doc_max_bytes = 0`) | 플랫폼 안내 |
-| 엔진이 따로 읽는 것 | 기본 자원을 물려받지 않게 한다 | 기본 스킬, 내장 플러그인의 스킬, 자동 메모리, claude.ai 계정의 스킬과 플러그인 동기를 끈다 | 홈 폴더의 개인 스킬(`~/.agents/skills`), 계정 플러그인, Apps, 기억을 끈다. 홈 폴더도 샌드박스로 돌린다 | 스킬은 플랫폼이 알린 것만 |
-| 허락 요청의 종류 | 허락 요청에 `kind`가 비어 온다 | 있다 | 있다 | `kind`. 비면 시작 알림의 값으로 채운다 |
-| 명령 | 그대로 | 그대로 | 따옴표로 감싸 온다. 여러 줄은 줄바꿈을 그대로 둔다 | `command` |
-| 파일 경로 | `rawInput.path` | 세부가 뒤의 갱신 알림에 온다 | `content`의 diff에 온다 | `path`(작업 폴더 기준) |
-| 인터넷 | `web_fetch`가 `kind: read`로 온다 | `Fetch` | 허락 없는 자체 웹 검색과 Apps 도구는 끄고, `curl`은 허락을 묻는다 | `url` |
-| 거절하면 | 그 단계만 건너뛰고 계속한다 | 그 단계만 건너뛰고 계속한다 | 차례 전체가 멈춘다(`cancel`) | 플랫폼이 거절을 알리고 이어서 하게 한다(`notices`). 최대 3번 |
-| 쓴 양 | 크레딧(`_kiro.dev/metadata`) | 컨텍스트 토큰 | 컨텍스트 토큰 | `usage` |
-| 답 | 도구 사이의 말이 이어 붙어 온다 | 같다 | 같다 | `segments`, `text`(빈 줄로 나눔) |
-| 올린 파일 | 그림을 받는다고 알린다(`image`) | 그림과 파일 내용을 받는다고 알린다(`image`, `embeddedContext`) | Claude와 같다 | 사진(png, jpg, gif, webp)은 그림 블록으로, 다른 파일과 3.5MB보다 큰 사진은 파일 경로(`resource_link`)로 보낸다. 질문 아래에는 경로(`inbox/…`)를 붙인다 |
-| 로그인 | 컴퓨터 전체에 걸린다. 터미널에서 | 샌드박스에. 코드를 붙여 넣는다 | 샌드박스에. 기기 코드 | 화면의 로그인 카드, 로그인 상태 |
-
-같은 요청(파일 읽기, 파일 쓰기, 명령, 인터넷, 모두 거절)에서 세 엔진 모두 네 단계를 보고하고 `끝`으로 끝났다. 같은 허락 규칙("outbox 안의 쓰기는 허락, 인터넷은 거절")을 걸면 세 엔진 모두 파일을 만들고 인터넷은 막혔다.
-
-## 샌드박스: 깨끗한 상태로 시작한다
-
-엔진마다 이 레포 안의 `.homes/<이름>/`을 설정 폴더로 쓴다. 그래서 내 컴퓨터에 원래 있던 전역 설정, 스킬, 플러그인, 기억, MCP 서버를 가져오지 않는다. `.homes/`는 `.gitignore`에 들어 있다.
-
-| 엔진 | 샌드박스 홈을 가리키는 환경변수 | 엔진 어댑터가 쓰는 설정 |
-|---|---|---|
-| Kiro | `KIRO_HOME` | `agents/engine.json`(쓸 도구와 묻지 않을 도구), `settings/cli.json`(기본 자원을 물려받지 않음) |
-| Claude | `CLAUDE_CONFIG_DIR` | 없음. 세션을 열 때 `settingSources: []`와 끄는 설정(`engines/claude.py`의 `SETTINGS`)을 보낸다 |
-| Codex | `CODEX_HOME`, 그리고 `HOME` | `config.toml` 맨 위의 관리 블록. 실행할 때마다 다시 쓰고, 사용자가 쓴 다른 줄은 그대로 둔다 |
-
-막혔는지는 세션 기록으로 확인했다. 레포의 개발 안내(`AGENTS.md`)와 이 컴퓨터의 개인 스킬은 세 엔진 어디에도 실리지 않았다. 까닭과 경위는 [GOTCHAS.md](GOTCHAS.md)에 있다. Codex 자체에 들어 있는 기본 스킬(예: `skill-creator`)은 남는다. Claude의 기본 스킬은 끄고 세션 기록에서 스킬 목록이 비어 있는 것을 확인했다(2026-11-04).
-
-## 안전 모드와 허락
-
-연결하면 바로 안전 모드로 바꾼다. 세 엔진이 같은 종류의 일을 묻도록 맞춰 두었다.
-
-| 일 | Kiro | Claude | Codex |
-|---|---|---|---|
-| 파일 읽기 | 묻지 않는다 | 묻지 않는다 | 묻지 않는다 |
-| 파일 쓰기 | 묻는다 | 묻는다 | 묻는다 |
-| 명령 실행 | 묻는다 | 묻는다. 단 `ls`, `date` 같은 읽기 전용 명령은 묻지 않는다 | 묻는다. 단 읽기 명령은 읽기만 되는 샌드박스 안에서 묻지 않고 실행한다 |
-| 인터넷 | 묻는다 | 묻는다 | 묻는다(`curl`) |
-| 설정 | 묻지 않는 도구는 `read`뿐 | 안전 모드 `default` | 안전 모드 `read-only` |
-
-엔진이 허락을 물으면 플랫폼은 그 요청을 `ToolRequest`로 바꾼 뒤 `custom/rules.py`에 묻는다. 규칙이 `"ask"`를 돌려주면 대시보드에 허락 카드가 뜬다. 같은 규칙은 어느 엔진에도 똑같이 걸린다. 예를 들어 `if request.url: return "deny"` 한 줄은 세 엔진의 인터넷을 모두 막는다.
+1. **켜 보기.** 이 폴더에서 `python dashboard.py`를 실행하면 브라우저에서 `http://127.0.0.1:8765`가 열립니다. macOS에서 `python`이 없으면 `python3`을 씁니다. 끝낼 때는 터미널에서 Ctrl+C를 누릅니다.
+2. **엔진 연결.** 왼쪽 엔진 카드에서 로그인하고 "연결"을 누릅니다. 아무 일이나 맡겨 보고, "작업 폴더에 메모 파일을 만들어 줘"처럼 파일을 쓰게 해서 허락 카드도 봅니다.
+3. **이름 짓기.** `custom/brand.json`의 이름과 한 줄 소개를 내 앱으로 바꿉니다. 브라우저를 새로 고치면 바뀝니다.
+4. **내 색감으로.** 코딩 에이전트(Claude Code, Codex, Kiro CLI)를 이 폴더에서 열고 "내가 좋아하는 색감으로 꾸며 줘"라고 맡겨 봅니다. 색은 `app/static/style.css` 맨 위의 `:root`에 모여 있습니다.
+5. **기능 하나.** 써 보면서 "이게 있으면 좋겠다" 싶은 것을 하나 더합니다. 고를 거리는 [만들_곳.md](만들_곳.md)에, 코딩 에이전트에게 맡기는 말의 예는 [안내/코딩_에이전트와_일하기.md](안내/코딩_에이전트와_일하기.md)에 있습니다.
 
 ## 준비
 
-- Python 3.10 이상. 설치할 Python 패키지는 없다.
+- Python 3.10 이상. 설치할 Python 패키지는 없습니다.
 - 쓸 엔진 하나 이상:
 
 | 엔진 | 필요한 것 | 계정 |
@@ -107,197 +23,182 @@
 | Claude | Node.js(`npx` 포함), [Claude Code](https://code.claude.com/docs) (`claude` 명령) | Claude Pro·Max 구독 |
 | Codex | Node.js(`npx` 포함), [Codex CLI](https://developers.openai.com/codex/cli) (`codex` 명령) | ChatGPT 구독 |
 
-Claude와 Codex의 ACP 어댑터는 처음 실행할 때 `npx`가 내려받는다. 버전은 `engines/claude.py`와 `engines/codex.py`에 고정했다.
+Claude와 Codex의 ACP 어댑터는 처음 연결할 때 `npx`가 내려받습니다. 버전은 `engines/claude.py`와 `engines/codex.py`에 고정했습니다.
 
-## 실행
+## 로그인
 
-```sh
-git clone https://github.com/<내 GitHub ID>/acp-starter.git   # 포크한 내 레포
-cd acp-starter
-python dashboard.py                 # 대시보드. 브라우저에서 http://127.0.0.1:8765 이 열린다
-```
-
-macOS에서 `python`이 없으면 `python3`을 쓴다. 끝내려면 터미널에서 Ctrl+C를 누른다.
-
-### 로그인
-
-대시보드의 "에이전트" 메뉴에서 에이전트를 고르면, 오른쪽 "돌릴 엔진"에 엔진마다 로그인 상태가 나온다. "로그인 필요"이면 그 줄의 "로그인"을 누른다. 그 자리에 로그인 상자가 뜬다.
+엔진 카드의 "로그인"을 누르면 그 자리에 로그인 상자가 뜹니다.
 
 | 엔진 | 로그인 상자 |
 |---|---|
-| Codex | 주소와 기기 코드가 나온다. 주소를 열고 ChatGPT 계정으로 로그인한 뒤 코드를 넣는다 |
-| Claude | 주소가 나온다(브라우저가 저절로 열리기도 한다). Claude 계정으로 로그인한 뒤 화면에 나온 코드를 복사해 상자의 칸에 붙여 넣는다 |
-| Kiro | 화면에서 로그인하지 않는다. Kiro 로그인은 컴퓨터 전체에 걸리므로 터미널에서 `kiro-cli login`을 실행한다 |
+| Codex | 주소와 기기 코드가 나옵니다. 주소를 열고 ChatGPT 계정으로 로그인한 뒤 코드를 넣습니다 |
+| Claude | 주소가 나옵니다(브라우저가 저절로 열리기도 합니다). Claude 계정으로 로그인한 뒤 화면에 나온 코드를 상자에 붙여 넣습니다 |
+| Kiro | 앱에서 로그인하지 않습니다. Kiro 로그인은 컴퓨터 전체에 걸리므로 터미널에서 `kiro-cli login`을 실행합니다 |
 
-이미 로그인된 엔진은 로그인을 다시 시작할 수 없다. Codex는 로그인을 시작하자마자 있던 로그인을 지우기 때문이다. 다른 계정으로 바꾸려면 "로그아웃"을 먼저 누른다.
+이미 로그인된 엔진은 로그인을 다시 시작할 수 없습니다. Codex는 로그인을 시작하자마자 있던 로그인을 지우기 때문입니다. 다른 계정으로 바꾸려면 "로그아웃"을 먼저 누릅니다. 터미널로도 할 수 있습니다: `python login.py claude`(로그인), `python login.py codex --status`(상태).
 
-터미널로도 할 수 있다: `python login.py claude`(로그인), `python login.py codex --status`(상태).
-
-### 터미널 예제
-
-```sh
-python chat.py                                  # 기본_도우미와 대화
-python chat.py 메모_정리 --engine claude          # 에이전트는 그대로, 엔진만 바꿔 대화
-python run_once.py                              # 기본_도우미에게 workspace/task.md를 한 번 맡기고 결과를 outbox/에 남긴다
-python run_once.py 메모_정리 "질문"               # 질문을 바로 맡긴다
-python -m unittest discover tests               # 가짜 엔진으로 확인한다. 사용량이 없다
-```
-
-## 대시보드
-
-왼쪽은 메뉴, 오른쪽은 고른 메뉴의 화면이다. 모든 화면이 "왼쪽 목록에서 고르면 오른쪽에 상세"가 나오는 꼴이다. 대화 화면의 목록은 대화들이다.
+## 앱의 모습
 
 | 자리 | 하는 일 |
 |---|---|
-| 맨 위 | 이름과 한 줄 소개(`custom/brand.json`). 오른쪽에 지금 열린 엔진 세션(에이전트 · 엔진 · 상태). 누르면 그 대화로 간다 |
-| 대화 | 왼쪽에 대화 목록(최근 것부터), 오른쪽에 고른 대화. 질문과 답, 올린 파일, 쓴 도구, "플랫폼이 보낸 안내", 허락 카드, 플랫폼 알림. 입력칸 왼쪽의 "+"로 파일과 사진을 올린다. 끌어 놓거나 붙여 넣어도 된다. "+ 새 대화"는 지금 대화와 같은 에이전트·엔진으로 새 대화를 연다. "지우기"를 누르고 한 번 더 누르면 대화를 지운다. 오른쪽 "이 대화의 결과"에는 대화를 연 때부터 마지막 메시지까지 `workspace/outbox/`에 생기거나 바뀐 파일이 보이고, 차례가 끝나면 가장 새것이 나온다. 파일이 둘 이상이면 위에서 고른다. "결과 닫기"로 접는다 |
-| 에이전트 | 에이전트와 돌릴 엔진을 골라 "…로 새 대화"를 시작한다. 지금 대화의 에이전트이면 "지금 대화를 …로 이어 가기"로 엔진만 바꾼다. 엔진의 로그인·로그아웃, 에이전트 만들기("+ 새 에이전트")와 고치기도 여기서 한다 |
-| 스킬 | `workspace/skills/`의 스킬. 설명, 쓰는 에이전트, `SKILL.md`, 해 볼 요청("대화 입력칸에 넣기") |
-| 일 | `tasks/`의 일. 맡을 에이전트와 엔진, 시각, 맡길 내용, "지금 실행", 이 일의 결과 |
-| 결과함 | `workspace/outbox/`의 md, json, html. 고르면 오른쪽에 내용이 나오고, html은 화면 안에서 보이며 새 탭에서도 열린다 |
+| 위 | 이름과 한 줄 소개(`custom/brand.json`), 지금 연결 상태 |
+| 왼쪽 엔진 카드 | 로그인 상태, 로그인, 연결, 로그아웃. 지금 대화의 엔진이 강조됩니다 |
+| 오른쪽 대화 | 질문과 답, 엔진이 쓴 도구, 허락 카드, "플랫폼이 보낸 안내". "새 대화"로 비웁니다 |
 
-허락을 기다리는 요청이 있으면 "대화" 메뉴에 숫자가 붙는다. 그 대화를 보고 있지 않으면 위에 띠가 뜬다. 띠를 누르면 그 대화로 간다.
+- 대화는 하나입니다. 기록은 `conversations/`에 남고 커밋되지 않습니다. 앱을 다시 켜도 이어집니다.
+- 엔진을 바꿔 연결해도 대화가 이어집니다. 앱이 앞의 대화(최근 12개, 8000자 안)를 새 엔진에게 넘기기 때문입니다.
+- 허락 카드는 5분 안에 누르지 않으면 거절합니다. 무엇을 묻고 무엇을 바로 허락할지는 `custom/rules.py`에서 정합니다.
+- 엔진이 일하는 폴더는 `workspace/`입니다. 엔진이 만든 파일은 커밋되지 않습니다(`.gitignore`).
 
-허락 카드는 5분 안에 누르지 않으면 거절한다. 일을 돌릴 때는 사람이 없는 것으로 본다. 그래서 `custom/rules.py`가 `"ask"`를 돌려주면 거절하고 결과 파일에 적는다. 대시보드를 켜기 전에 이미 지난 오늘의 시각은 건너뛴다. 꺼져 있던 동안 놓친 실행은 나중에 몰아서 하지 않는다.
-
-대화 하나는 에이전트 하나와 나눈다. 대화 기록은 `conversations/<번호>.json`에 남는다. 이 폴더는 `.gitignore`에 들어 있어서 커밋되지 않는다.
-
-엔진 세션은 한 번에 하나만 열어 둔다. 다른 대화에 질문하거나 대화의 엔진을 바꾸면 플랫폼이 세션을 새로 연다. 그때 그 대화의 앞부분(최근 12개, 8000자 안)을 플랫폼 안내에 넣어 보낸다. 그래서 엔진을 바꿔도, 대시보드를 다시 켜도 대화가 이어진다. 한 대화가 답을 쓰는 동안에는 다른 대화에 보낼 수 없다.
-
-올린 파일은 `workspace/inbox/`에 저장된다. 이 폴더도 커밋되지 않는다. 파일 하나는 20MB까지다. 큰 사진(긴 변 2000px 또는 1.5MB 넘음)은 화면이 올리기 전에 줄인다. 엔진은 큰 그림을 받지 않기 때문이다. HEIC 사진은 엔진이 그림으로 받지 못하므로 JPG로 바꿔 올린다.
-
-### 처음 해 볼 것
-
-1. "에이전트" 메뉴에서 `메모_정리`를 고른다.
-2. "돌릴 엔진"에서 엔진을 고른다. 로그인이 필요하면 그 자리에서 한다. "…로 새 대화"를 누른다.
-3. "스킬" 메뉴에서 `memo-to-json`을 고르고 "대화 입력칸에 넣기"를 누른 뒤 보낸다. 에이전트가 `SKILL.md`와 메모 사진(`workspace/자료/발표준비/내준비메모.jpg`)을 읽는다.
-4. 에이전트가 검사 스크립트를 실행하려 하면 허락 카드가 뜬다. 명령을 읽고 "허락"을 누른다. "결과함"에 `.json`이 생긴다.
-5. 내 손글씨 메모를 사진으로 찍어 "+"로 올리고 "이 사진을 memo-to-json 스킬로 정리해 줘"를 보낸다.
-6. "에이전트" 메뉴에서 다른 엔진을 고르고 "…로 새 대화"로 같은 요청을 보낸다. 같은 역할, 같은 스킬, 같은 허락 규칙으로 일하는지 본다. "지금 대화를 …로 이어 가기"를 누르면 같은 대화를 다른 엔진으로 이어 간다.
-7. "+ 새 에이전트"로 내 업무 에이전트를 하나 만든다.
-
-AI가 읽고 정리하는 일과, 코드가 검사하고 저장하는 일이 나뉘어 있다. 에이전트는 도구를 고르고, 플랫폼은 허락을 묻고, 사람이 정한다.
-
-### 일 파일
-
-`tasks/` 아래에 `.md` 파일 하나가 일 하나다. 파일 이름이 일의 이름이다. 첫머리의 `---` 사이에 맡을 에이전트, 바꿔 쓸 엔진, 매일 실행할 시각을 적고, 그 아래에 맡길 내용을 적는다.
+## 구조
 
 ```
----
-agent: 기본_도우미
-engine: claude
-time: 07:30
----
-notes.md를 읽고, 마감이 있는 일만 날짜 순서로 표로 정리해 줘.
+사용자의 입력 (화면, 터미널)
+   │   플랫폼 안내(업무, 도구 규칙, 앞의 대화)와 질문
+   ▼
+플랫폼                     custom_loader.py, conversations.py, dashboard.py, app/static/   ← 엔진 이름을 모른다
+   │   engines.make(엔진 이름)
+   ▼
+엔진 어댑터                engines/kiro.py, claude.py, codex.py (공통은 engines/base.py)
+   │   그 엔진에 맞는 형식으로 바꾼다(샌드박스, 세션 설정, 안전 모드, 허락 답)
+   ▼
+엔진                       kiro-cli, claude-agent-acp, codex-acp
+   ▼
+엔진 어댑터                하나의 형식으로 포장한다(ToolRequest, TurnResult)
+   ▼
+플랫폼                     화면 표시, 허락 규칙(custom/rules.py), 대화 기록
 ```
 
-`agent`를 빼면 `기본_도우미`, `engine`을 빼면 에이전트의 기본 엔진, `time`을 빼면 직접 실행할 때만 돈다. 결과 파일은 엔진과 상관없이 같은 꼴이다(끝난 까닭, 에이전트, 엔진, 쓴 양, 쓴 도구, 거절한 도구, 플랫폼 알림, 답).
+엔진이 무엇이든 플랫폼이 받는 것은 같은 꼴입니다. 그래서 **엔진을 바꿔도 앱의 기능은 그대로 돕니다.** 내가 더하는 기능도 플랫폼 쪽에 만들면 어느 엔진으로든 돕니다.
 
-### 대시보드 API
-
-서버(`dashboard.py`)는 JSON만 낸다. 화면(`app/static/`)은 이 API를 부르는 클라이언트다. 새 기능은 먼저 API를 더하고, 그다음에 화면에서 그 API를 부른다.
-
-| 요청 | 하는 일 | 응답 |
+| 형식 | 뜻 | 칸 |
 |---|---|---|
-| `GET /api/agents` | 에이전트 목록과 지금 열린 엔진 세션 | `{"agents": [{"name", "engine", "description", "skills", "role"}], "current", "engine", "state"}`. `skills`가 `null`이면 모든 스킬 |
-| `POST /api/agents` `{"name", "engine", "description", "skills", "role"}` | 에이전트 만들기 | `201`. 이름이 이미 있으면 `409`, 틀린 값이면 `400` |
-| `PUT /api/agents/{이름}` | 에이전트 고치기(이름은 그대로) | `200`. 없으면 `404` |
-| `GET /api/conversations` | 대화 목록(최근에 바뀐 것부터) | `{"conversations": [{"id", "title", "agent", "engine", "created", "updated", "messages"(질문과 답의 수)}]}` |
-| `POST /api/conversations` `{"agent", "engine"}` | 새 대화. `engine`을 빼면 에이전트의 기본 엔진 | `201`. 대화 하나. 없는 에이전트는 `404`, 없는 엔진은 `400` |
-| `GET /api/conversations/{번호}` | 대화 하나와 메시지. 메시지의 꼴은 `conversations.py` 머리에 있다 | `{"id", "title", "agent", "engine", "created", "updated", "messages"}`. 없으면 `404` |
-| `PATCH /api/conversations/{번호}` `{"engine"}` | 대화의 엔진 바꾸기. 다음 질문에서 지금까지의 대화를 새 엔진에 넘긴다 | `200`. 답을 쓰는 중이면 `409` |
-| `DELETE /api/conversations/{번호}` | 대화 지우기 | `200`. 답을 쓰는 중이면 `409`, 없으면 `404` |
-| `POST /api/conversations/{번호}/prompt` `{"text", "files"}` | 질문 보내기. `files`는 올린 파일의 경로(`inbox/…`) 목록이다. 답은 사건으로 오고, 끝나면 대화 기록에 남는다 | `202`. 다른 질문의 답을 쓰는 중이면 `409`, 없는 파일이면 `400` |
-| `POST /api/uploads?name={파일 이름}` 본문은 파일 그대로 | 파일 올리기. `workspace/inbox/`에 저장한다. 같은 이름이 있으면 덮어쓰지 않고 `-2`를 붙인다 | `201` `{"name", "path", "url", "type", "size"}`. 20MB보다 크면 `413` |
-| `GET /inbox/{파일 이름}` | 올린 파일 그대로. 대시보드 API를 부르지 못하게 따로 떼어 연다 | 파일 |
-| `GET /api/state` | 지금 엔진 세션과, 답을 쓰는 중인 차례의 사건. 화면을 처음 열 때 부른다 | `{"state", "agent", "engine", "conversation", "live", "last", "epoch"}` |
-| `POST /api/permissions/{번호}` `{"allow": true}` | 허락 카드에 답하기 | `200`. 기다리는 요청이 없으면 `404` |
-| `GET /api/events?after={번호}` | 그 번호 뒤의 사건. 새 사건이 없으면 15초까지 기다린다 | `{"events", "last", "epoch", "state", "agent", "engine", "conversation"}`. `epoch`는 서버를 켤 때마다 바뀐다. 바뀌면 화면은 `/api/state`부터 다시 읽는다 |
-| `GET /api/engines` | 엔진 목록, 설치·로그인 상태, 로그인 방식 | `{"engines": [{"name", "installed", "loggedIn", "loginMode", "loginCommand", "canLogout"}]}` |
-| `POST /api/login/{엔진}` | 로그인 시작. 진행은 사건 `login`으로 온다 | `202`. 이미 로그인되어 있으면 `409`, 터미널로 하는 엔진은 `400` |
-| `POST /api/login/{엔진}/code` `{"code"}` | 코드 방식 로그인의 코드 넘기기 | `202`. 진행 중인 로그인이 없으면 `404` |
-| `DELETE /api/login/{엔진}` | 진행 중인 로그인 멈추기 | `200` |
-| `POST /api/logout/{엔진}` | 로그아웃 | `200`. 화면에서 로그아웃하지 않는 엔진은 `400` |
-| `GET /api/brand` | 이름, 한 줄 소개, 색 | `{"name", "tagline", "accent"}` |
-| `GET /api/skills` | 스킬 목록 | `{"skills": [{"name", "description", "example", "path"}]}` |
-| `GET /api/skills/{이름}` | 스킬 하나 | `{"name", "description", "example", "path", "text"(SKILL.md), "agents"(이 스킬을 쓰는 에이전트)}`. 없으면 `404` |
-| `GET /api/tasks` | 일 목록 | `{"tasks": [{"name", "agent", "engine", "time", "prompt", "lastRun"}]}` |
-| `POST /api/tasks/{이름}/run` | 일을 바로 실행 | `202` |
-| `GET /api/outbox` | 결과 파일 목록(새것부터). `modified`는 바뀐 시각으로, 대화 기록의 시각과 같은 꼴이다 | `{"files": [{"name", "type", "url", "modified"}]}` |
-| `GET /api/outbox/{파일 이름}` | 결과 파일 내용 | `{"name", "type", "url", "text"}` |
-| `GET /outbox/{파일 이름}` | 결과 파일 그대로. 대시보드 API를 부르지 못하게 따로 떼어 연다 | 파일 |
-
-사건의 종류(`type`). `status`부터 `done`까지는 대화의 사건이라서 어느 대화의 것인지 `conversation` 칸이 있다.
-
-| 사건 | 뜻과 칸 |
-|---|---|
-| `status` | 엔진 세션의 상태. `state`(`starting`, `busy`, `error`), `agent`, `engine`, 오류이면 `message` |
-| `preamble` | 새 세션의 첫 질문 앞에 붙인 플랫폼 안내. `engine`, `text`, `history`(넣은 앞의 대화 수) |
-| `user`, `text` | 보낸 질문(`text`, `files`), 답의 조각 |
-| `tool`, `permission`, `rule` | 쓴 도구, 허락 요청, 규칙이 정한 허락·거절. `kind`, `label`, `detail` |
-| `permission_result`, `rule_error` | 허락 결과, 규칙 오류 |
-| `record_error` | 대화 기록을 저장하지 못했다. 답은 계속 받는다 |
-| `notice` | 플랫폼 알림. 예: 거절 뒤 멈춘 엔진에게 이어서 하게 했다 |
-| `done` | 차례 끝. `stop`, `stopLabel`, `usage`, `refused`(거절한 도구 수) |
-| `task` | 일의 시작과 끝. `agent`, `engine`, `file`, `deliveryError` |
-| `login` | 로그인 진행. `engine`, `state`(`started`, `waiting`, `checking`, `done`, `failed`, `cancelled`, `logged_out`) |
-
-## 파일
+| `ToolRequest` | 엔진이 쓰려는 도구 하나 | `kind`(종류), `command`(명령), `path`(작업 폴더 기준 파일), `url`(인터넷 주소), `label`(화면 이름), `detail`(세부) |
+| `TurnResult` | 한 차례의 결과 | `stop`(끝난 까닭: `done`, `limit`, `refusal`, `cancelled`), `text`(답), `segments`(도구 사이사이의 말), `tools`(쓴 도구), `refused`(거절한 도구), `notices`(플랫폼 알림), `usage`(쓴 양) |
 
 | 파일 | 하는 일 |
 |---|---|
-| `custom/` | 내가 먼저 바꾸는 곳. `brand.json`(이름과 색), `업무.md`(모든 에이전트에 공통인 업무), `agents/`(에이전트), `rules.py`(허락 규칙), `deliver.py`(결과 보내기) |
-| `만들_곳.md` | 바꾸거나 더할 수 있는 곳의 지도와 Kiro Crew의 비슷한 위치 |
-| `AGENTS.md`, `CLAUDE.md` | 이 레포를 고치는 코딩 에이전트용 개발 안내 |
-| `안내/`, `계획/`, `기록/`, `발표/` | 최종 과제 안내와 계획서·기록·발표 자리 |
-| `engines/base.py` | 엔진 층의 공통 통역. ACP로 엔진과 이야기하고, 올린 파일을 그 엔진이 받는 블록으로 바꾸고, ToolRequest와 TurnResult로 포장한다 |
-| `engines/kiro.py`, `claude.py`, `codex.py` | 엔진 하나에 파일 하나. 실행 명령, 샌드박스, 안전 모드, 로그인, 그 엔진만의 모양을 맞춘다 |
-| `engines/__init__.py` | 엔진 목록. 플랫폼은 `engines.make(이름, 작업 폴더)`로만 엔진을 만든다 |
-| `custom_loader.py` | 플랫폼 층. `custom/`와 스킬을 읽고, 에이전트를 읽고 저장하고, 플랫폼 안내를 만든다 |
-| `conversations.py` | 플랫폼 층. 대화 기록을 `conversations/<번호>.json`으로 읽고 쓴다 |
-| `dashboard.py` | 대시보드의 서버. JSON API, 에이전트, 대화, 엔진 세션, 로그인, 일 실행, 스케줄, 결과함 |
-| `app/static/` | 대시보드의 화면(`index.html`, `style.css`, `app.js`). 왼쪽 메뉴와 오른쪽 화면. 메뉴를 더하려면 `nav`에 버튼, `main`에 `view`를 하나씩 더한다 |
-| `runner.py` | 사람 없이 일을 한 번 돌리는 공용 코드. `run_once.py`와 대시보드가 함께 쓴다 |
-| `tasks/` | 맡길 일 파일. 예: `마감_브리핑.md` |
-| `login.py`, `chat.py`, `run_once.py` | 터미널 예제: 로그인, 대화, 한 번 실행 |
-| `conversations/` | 대화 기록. 대화 하나가 파일 하나다. 커밋되지 않는다 |
-| `workspace/` | 엔진이 일하는 작업 폴더. 엔진만의 파일은 두지 않는다 |
-| `workspace/inbox/` | 화면에서 올린 파일. 커밋되지 않는다 |
-| `workspace/skills/` | 스킬. 수업 스킬 `memo-to-json`, `data-to-html` |
-| `workspace/자료/발표준비/` | 스킬을 해 볼 예시 자료(메모 사진, md, csv) |
-| `tests/` | 가짜 엔진과 가짜 로그인으로 도는 테스트. `test_safety.py`는 안전 모드와 샌드박스를, `test_engine_agnostic.py`는 플랫폼 층이 엔진에 기대지 않는지를, `test_tool_request.py`는 세 엔진의 실제 도구 요청이 같은 꼴이 되는지를, `test_engines.py`는 TurnResult 포장과 거절 뒤 이어 가기를 본다 |
+| `custom/brand.json` | 앱 이름, 한 줄 소개, 강조색 |
+| `custom/업무.md` | 엔진에게 먼저 알리는 내 업무와 규칙. 어느 엔진으로 연결해도 같은 글이 갑니다 |
+| `custom/rules.py` | 허락 규칙. `decide(request)`가 `"allow"`, `"deny"`, `"ask"`를 돌려줍니다 |
+| `app/static/` | 앱 화면(`index.html`, `style.css`, `app.js`). `dashboard.py`의 API를 부르는 클라이언트입니다 |
+| `dashboard.py` | 앱 서버. JSON API만 냅니다. 엔진 목록과 로그인, 연결, 대화, 허락 카드 |
+| `custom_loader.py` | `custom/`를 읽고 플랫폼 안내를 만듭니다 |
+| `conversations.py` | 대화 기록을 `conversations/<번호>.json`으로 읽고 씁니다 |
+| `engines/` | 엔진 층. `base.py`가 공통 통역이고, 엔진 하나에 파일 하나입니다 |
+| `login.py`, `chat.py` | 터미널 예제: 로그인, 대화(`python chat.py claude`) |
+| `tests/` | 가짜 엔진으로 도는 테스트. `python -m unittest discover tests`. 사용량이 들지 않습니다 |
+| `만들_곳.md` | 바꾸거나 더할 수 있는 곳 |
+| `AGENTS.md`, `CLAUDE.md` | 이 폴더를 고치는 코딩 에이전트용 개발 안내 |
+| `안내/`, `계획/`, `기록/`, `발표/` | 최종 과제 안내, 계획, 기록, 발표 자리 |
+
+## 엔진마다 다른 점
+
+2026-10-21에 세 엔진(Kiro CLI 2.29.1, claude-agent-acp 0.94.0, codex-acp 2.2.2)을 실제로 돌려 확인했습니다. 맞추는 코드는 `engines/`에 있습니다.
+
+| 다른 점 | Kiro | Claude | Codex | 플랫폼이 받는 꼴 |
+|---|---|---|---|---|
+| 역할과 지침 | 엔진 설정의 역할 문장(`prompt`)을 비웁니다 | `CLAUDE.md`를 읽지 않게 합니다(`settingSources: []`) | `AGENTS.md`를 읽지 않게 합니다(`project_doc_max_bytes = 0`) | 플랫폼 안내 |
+| 엔진이 따로 읽는 것 | 기본 자원을 물려받지 않게 합니다 | 기본 스킬, 내장 플러그인의 스킬, 자동 메모리, claude.ai 계정의 스킬과 플러그인 동기를 끕니다 | 홈 폴더의 개인 스킬(`~/.agents/skills`), 계정 플러그인, Apps, 기억을 끕니다. 홈 폴더도 샌드박스로 돌립니다 | 엔진에게 가는 것은 플랫폼 안내뿐 |
+| 허락 요청의 종류 | `kind`가 비어 옵니다 | 있습니다 | 있습니다 | `kind`. 비면 시작 알림의 값으로 채웁니다 |
+| 명령 | 그대로 | 그대로 | 따옴표로 감싸 옵니다 | `command` |
+| 파일 경로 | `rawInput.path` | 세부가 뒤의 갱신 알림에 옵니다 | `content`의 diff에 옵니다 | `path`(작업 폴더 기준) |
+| 인터넷 | `web_fetch`가 `kind: read`로 옵니다 | `Fetch` | 자체 웹 검색과 Apps 도구는 끄고, `curl`은 허락을 묻습니다 | `url` |
+| 거절하면 | 그 단계만 건너뛰고 계속합니다 | 그 단계만 건너뛰고 계속합니다 | 차례 전체가 멈춥니다(`cancel`) | 플랫폼이 거절을 알리고 이어서 하게 합니다(`notices`). 최대 3번 |
+| 쓴 양 | 크레딧 | 컨텍스트 토큰 | 컨텍스트 토큰 | `usage` |
+| 로그인 | 컴퓨터 전체에 걸립니다. 터미널에서 | 샌드박스에. 코드를 붙여 넣습니다 | 샌드박스에. 기기 코드 | 엔진 카드의 로그인 상자 |
+
+## 샌드박스: 깨끗한 상태로 시작합니다
+
+엔진마다 이 폴더 안의 `.homes/<이름>/`을 설정 폴더로 씁니다. 그래서 내 컴퓨터에 원래 있던 전역 설정, 스킬, 플러그인, 기억, MCP 서버를 가져오지 않습니다. `.homes/`에는 로그인 정보가 들어 있고 `.gitignore`에 들어 있습니다.
+
+| 엔진 | 샌드박스 홈을 가리키는 환경변수 | 엔진 어댑터가 쓰는 설정 |
+|---|---|---|
+| Kiro | `KIRO_HOME` | `agents/engine.json`(쓸 도구와 묻지 않을 도구), `settings/cli.json`(기본 자원을 물려받지 않음) |
+| Claude | `CLAUDE_CONFIG_DIR` | 설정 파일 없음. 세션을 열 때 `settingSources: []`와 끄는 설정(`engines/claude.py`의 `SETTINGS`)을 보냅니다 |
+| Codex | `CODEX_HOME`, 그리고 `HOME` | `config.toml` 맨 위의 관리 블록. 실행할 때마다 다시 쓰고, 사용자가 쓴 다른 줄은 그대로 둡니다 |
+
+막혔는지는 세션 기록으로 확인했습니다. 이 폴더의 개발 안내(`AGENTS.md`)와 컴퓨터의 개인 스킬은 세 엔진 어디에도 실리지 않았습니다. Codex 자체의 기본 스킬(예: `skill-creator`)은 남습니다. Claude의 기본 스킬은 끄고 스킬 목록이 비어 있는 것을 확인했습니다(2026-11-04). 까닭과 경위는 [GOTCHAS.md](GOTCHAS.md)에 있습니다.
+
+## 안전 모드와 허락
+
+연결하면 바로 안전 모드로 바꿉니다. 세 엔진이 같은 종류의 일을 묻도록 맞춰 두었습니다.
+
+| 일 | Kiro | Claude | Codex |
+|---|---|---|---|
+| 파일 읽기 | 묻지 않습니다 | 묻지 않습니다 | 묻지 않습니다 |
+| 파일 쓰기 | 묻습니다 | 묻습니다 | 묻습니다 |
+| 명령 실행 | 묻습니다 | 묻습니다. 단 `ls`, `date` 같은 읽기 전용 명령은 묻지 않습니다 | 묻습니다. 단 읽기 명령은 읽기만 되는 샌드박스 안에서 묻지 않고 실행합니다 |
+| 인터넷 | 묻습니다 | 묻습니다 | 묻습니다(`curl`) |
+| 설정 | 묻지 않는 도구는 `read`뿐 | 안전 모드 `default` | 안전 모드 `read-only` |
+
+엔진이 허락을 물으면 플랫폼은 그 요청을 `ToolRequest`로 바꾼 뒤 `custom/rules.py`에 묻습니다. 규칙이 `"ask"`를 돌려주면 허락 카드가 뜹니다. 같은 규칙은 어느 엔진에도 똑같이 걸립니다. 예를 들어 `if request.url: return "deny"` 한 줄은 세 엔진의 인터넷을 모두 막습니다.
+
+## 앱 API
+
+서버(`dashboard.py`)는 JSON만 냅니다. 화면(`app/static/`)은 이 API를 부르는 클라이언트입니다. 새 기능은 먼저 API를 더하고, 그다음에 화면에서 그 API를 부릅니다. 오류는 `{"error"}`로 옵니다.
+
+| 요청 | 하는 일 | 응답 |
+|---|---|---|
+| `GET /api/brand` | 이름, 한 줄 소개, 색 | `{"name", "tagline", "accent"}` |
+| `GET /api/engines` | 엔진 목록, 설치·로그인 상태, 로그인 방식 | `{"engines": [{"name", "installed", "loggedIn", "loginMode", "loginCommand", "canLogout"}]}` |
+| `GET /api/state` | 지금 연결 상태와 답을 쓰는 중인 차례의 사건. 화면을 처음 열 때 부릅니다 | `{"state", "engine", "conversation", "live", "last", "epoch"}` |
+| `GET /api/conversation` | 지금 대화. 메시지의 꼴은 `conversations.py` 머리에 있습니다 | `{"id", "engine", "created", "updated", "messages"}` |
+| `POST /api/conversation/new` | 새 대화. 엔진 세션을 닫습니다 | `201`. 답을 쓰는 중이면 `409` |
+| `POST /api/connect` `{"engine"}` | 엔진 연결. 엔진을 바꾸면 앞의 대화를 새 엔진에 넘깁니다 | `202`. 없는 엔진은 `400`, 답을 쓰는 중이면 `409` |
+| `POST /api/prompt` `{"text"}` | 질문 보내기. 연결하지 않았으면 대화의 엔진으로 연결합니다. 답은 사건으로 옵니다 | `202`. 빈 글은 `400`, 답을 쓰거나 연결하는 중이면 `409` |
+| `POST /api/permissions/{번호}` `{"allow": true}` | 허락 카드에 답하기 | `200`. 기다리는 요청이 없으면 `404` |
+| `GET /api/events?after={번호}` | 그 번호 뒤의 사건. 새 사건이 없으면 15초까지 기다립니다 | `{"events", "last", "epoch", "state", "engine"}`. `epoch`가 바뀌면 서버를 다시 켠 것이므로 `/api/state`부터 다시 읽습니다 |
+| `POST /api/login/{엔진}` | 로그인 시작. 진행은 사건 `login`으로 옵니다 | `202`. 이미 로그인했으면 `409`, 터미널로 하는 엔진은 `400` |
+| `POST /api/login/{엔진}/code` `{"code"}` | 코드 방식 로그인의 코드 넘기기 | `202` |
+| `DELETE /api/login/{엔진}` | 진행 중인 로그인 멈추기 | `200` |
+| `POST /api/logout/{엔진}` | 로그아웃 | `200` |
+
+사건의 종류(`type`):
+
+| 사건 | 뜻 |
+|---|---|
+| `status` | 연결 상태. `state`(`starting`, `ready`, `busy`, `error`), `engine`, 오류이면 `message` |
+| `preamble` | 새 세션의 첫 질문 앞에 붙인 플랫폼 안내. `engine`, `text`, `history`(넣은 앞의 대화 수) |
+| `user`, `text` | 보낸 질문, 답의 조각 |
+| `tool`, `permission`, `rule` | 쓴 도구, 허락 요청, 규칙이 정한 허락·거절. `kind`, `label`, `detail` |
+| `permission_result`, `rule_error` | 허락 결과, 규칙 오류 |
+| `note`, `notice` | 플랫폼이 대화에 남긴 알림(예: 엔진을 바꿨다), 거절 뒤 이어서 하게 한 알림 |
+| `conversation` | 새 대화를 열었다 |
+| `record_error` | 대화 기록을 저장하지 못했다. 답은 계속 받습니다 |
+| `done` | 차례 끝. `stop`, `stopLabel`, `usage`, `refused` |
+| `login` | 로그인 진행. `engine`, `state`(`started`, `waiting`, `checking`, `done`, `failed`, `cancelled`, `logged_out`) |
 
 ## ACP 흐름
 
-메시지는 JSON 한 줄씩 표준 입출력으로 주고받는다(JSON-RPC 2.0). 세 엔진이 같은 흐름을 쓴다.
+메시지는 JSON 한 줄씩 표준 입출력으로 주고받습니다(JSON-RPC 2.0). 세 엔진이 같은 흐름을 씁니다.
 
 | 순서 | 메시지 | 보내는 쪽 | 뜻 |
 |---|---|---|---|
-| 1 | `initialize` | 플랫폼 | 플랫폼이 해 줄 수 있는 일을 알린다 |
-| 2 | `session/new` | 플랫폼 | 작업 폴더를 정하고 대화 하나를 연다. 엔진에 따라 `_meta`를 붙인다(Claude) |
-| 3 | `session/set_mode` | 플랫폼 | 안전 모드로 바꾼다(Claude, Codex) |
-| 4 | `session/prompt` | 플랫폼 | 질문을 보낸다. 첫 질문에는 플랫폼 안내가 앞에 붙는다 |
-| 5 | `session/update` | 엔진 | 답의 조각, 도구 사용과 그 갱신, 컨텍스트 사용량을 알린다 |
-| 6 | `session/request_permission` | 엔진 | 도구를 써도 되는지 묻는다. 플랫폼은 `ToolRequest`로 바꿔 `custom/rules.py`와 사람에게 묻고, 그 엔진의 선택지로 답한다 |
-| 7 | `session/prompt`의 응답 | 엔진 | 이번 차례가 끝났다(`stopReason`). 플랫폼은 `TurnResult`로 포장한다 |
+| 1 | `initialize` | 플랫폼 | 플랫폼이 해 줄 수 있는 일을 알립니다 |
+| 2 | `session/new` | 플랫폼 | 작업 폴더를 정하고 대화 하나를 엽니다. 엔진에 따라 `_meta`를 붙입니다(Claude) |
+| 3 | `session/set_mode` | 플랫폼 | 안전 모드로 바꿉니다(Claude, Codex) |
+| 4 | `session/prompt` | 플랫폼 | 질문을 보냅니다. 첫 질문에는 플랫폼 안내가 앞에 붙습니다 |
+| 5 | `session/update` | 엔진 | 답의 조각, 도구 사용과 그 갱신, 사용량을 알립니다 |
+| 6 | `session/request_permission` | 엔진 | 도구를 써도 되는지 묻습니다. 플랫폼은 `ToolRequest`로 바꿔 `custom/rules.py`와 사람에게 묻고, 그 엔진의 선택지로 답합니다 |
+| 7 | `session/prompt`의 응답 | 엔진 | 이번 차례가 끝났습니다(`stopReason`). 플랫폼은 `TurnResult`로 포장합니다 |
 
 ## 새 엔진 더하기
 
-1. `engines/<이름>.py`를 만들고 `AcpEngine`을 이어받는다. 실행 명령, 샌드박스 홈 환경변수, 안전 모드, 로그인 명령을 적는다.
-2. 그 엔진만의 모양이 있으면 훅을 덮어쓴다: `prepare_home`(설정 파일), `session_meta`, `file_block`(올린 파일), `choose_option`(허락 선택지), `command_text`, `tool_request`, `on_extension`(확장 알림), `logged_in`.
-3. `engines/__init__.py`의 `ENGINES`에 더한다.
-4. 실제로 받은 도구 요청의 모양을 `tests/test_tool_request.py`에 더하고, 테스트를 모두 돌린다.
-5. 세션 기록으로 개발 안내와 개인 설정이 실리지 않는지 확인한다.
+1. `engines/<이름>.py`를 만들고 `AcpEngine`을 이어받습니다. 실행 명령, 샌드박스 홈 환경변수, 안전 모드, 로그인 명령을 적습니다.
+2. 그 엔진만의 모양이 있으면 훅을 덮어씁니다: `prepare_home`(설정 파일), `session_meta`, `file_block`(올린 파일), `choose_option`(허락 선택지), `command_text`, `tool_request`, `on_extension`(확장 알림), `logged_in`.
+3. `engines/__init__.py`의 `ENGINES`에 더합니다.
+4. 실제로 받은 도구 요청의 모양을 `tests/test_tool_request.py`에 더하고, 테스트를 모두 돌립니다.
+5. 세션 기록으로 개발 안내와 개인 설정이 실리지 않는지 확인합니다.
 
 ## 주의
 
-- 이 레포는 공개다. 토큰, 비밀번호, 개인 정보, 회사 자료를 커밋하지 않는다. `.homes/`와 `.env`는 `.gitignore`에 들어 있다.
-- `.homes/`에는 로그인 정보가 들어 있다. 다른 사람에게 이 폴더를 주지 않는다.
-- 안전 모드를 Claude의 `bypassPermissions`나 Codex의 `agent-full-access`로 바꾸지 않는다. 모든 도구를 묻지 않고 허락한다. 허락을 넓히려면 `custom/rules.py`로 한다.
-- 구독 계정의 사용 규칙은 바뀔 수 있다. 쓰기 전에 각 서비스의 안내를 확인한다. Claude는 2026-10-07 도움말 센터 기준으로 Agent SDK를 플랜 사용 한도 안에서 쓸 수 있다.
-- 이 예제는 macOS에서 실행해 확인했다. Windows에서는 실행해 보지 않았다. Windows에서 Codex의 홈 폴더 격리(`HOME`)가 듣는지도 확인하지 않았다.
-- 답을 기다리는 시간 제한과 중간에 멈추기(`session/cancel`)는 다루지 않는다. 일 실행만 300초가 지나면 연결을 끊는다.
-- 대시보드는 내 컴퓨터(`127.0.0.1`)에서만 열린다. 인증이 없으므로 밖으로 열지 않는다.
+- 토큰, 비밀번호, 개인 정보, 회사 자료를 커밋하지 않습니다. 시크릿은 `.env`에 둡니다. `.homes/`와 `.env`는 `.gitignore`에 들어 있습니다.
+- `.homes/`에는 로그인 정보가 들어 있습니다. 다른 사람에게 이 폴더를 주지 않습니다.
+- 안전 모드를 Claude의 `bypassPermissions`나 Codex의 `agent-full-access`로 바꾸지 않습니다. 모든 도구를 묻지 않고 허락하게 됩니다. 허락을 넓히려면 `custom/rules.py`로 합니다.
+- 구독 계정의 사용 규칙은 바뀔 수 있습니다. 쓰기 전에 각 서비스의 안내를 확인합니다.
+- 앱은 내 컴퓨터(`127.0.0.1`)에서만 열립니다. 인증이 없으므로 밖으로 열지 않습니다.
+- 답을 기다리는 시간 제한과 중간에 멈추기(`session/cancel`)는 아직 없습니다.
 
 ## 참고
 
