@@ -57,7 +57,7 @@
 | 다른 점 | Kiro | Claude | Codex | 플랫폼이 받는 꼴 |
 |---|---|---|---|---|
 | 역할과 지침 | 엔진 설정의 역할 문장(`prompt`)을 비운다 | `CLAUDE.md`를 읽지 않게 한다(`settingSources: []`) | `AGENTS.md`를 읽지 않게 한다(`project_doc_max_bytes = 0`) | 플랫폼 안내 |
-| 엔진이 따로 읽는 것 | 기본 자원을 물려받지 않게 한다 | 개인 스킬이 실리지 않았다 | 홈 폴더의 개인 스킬(`~/.agents/skills`), 계정 플러그인, Apps, 기억을 끈다. 홈 폴더도 샌드박스로 돌린다 | 스킬은 플랫폼이 알린 것만 |
+| 엔진이 따로 읽는 것 | 기본 자원을 물려받지 않게 한다 | 기본 스킬, 내장 플러그인의 스킬, 자동 메모리, claude.ai 계정의 스킬과 플러그인 동기를 끈다 | 홈 폴더의 개인 스킬(`~/.agents/skills`), 계정 플러그인, Apps, 기억을 끈다. 홈 폴더도 샌드박스로 돌린다 | 스킬은 플랫폼이 알린 것만 |
 | 허락 요청의 종류 | 허락 요청에 `kind`가 비어 온다 | 있다 | 있다 | `kind`. 비면 시작 알림의 값으로 채운다 |
 | 명령 | 그대로 | 그대로 | 따옴표로 감싸 온다. 여러 줄은 줄바꿈을 그대로 둔다 | `command` |
 | 파일 경로 | `rawInput.path` | 세부가 뒤의 갱신 알림에 온다 | `content`의 diff에 온다 | `path`(작업 폴더 기준) |
@@ -77,10 +77,10 @@
 | 엔진 | 샌드박스 홈을 가리키는 환경변수 | 엔진 어댑터가 쓰는 설정 |
 |---|---|---|
 | Kiro | `KIRO_HOME` | `agents/engine.json`(쓸 도구와 묻지 않을 도구), `settings/cli.json`(기본 자원을 물려받지 않음) |
-| Claude | `CLAUDE_CONFIG_DIR` | 없음. 세션을 열 때 `settingSources: []`를 보낸다 |
+| Claude | `CLAUDE_CONFIG_DIR` | 없음. 세션을 열 때 `settingSources: []`와 끄는 설정(`engines/claude.py`의 `SETTINGS`)을 보낸다 |
 | Codex | `CODEX_HOME`, 그리고 `HOME` | `config.toml` 맨 위의 관리 블록. 실행할 때마다 다시 쓰고, 사용자가 쓴 다른 줄은 그대로 둔다 |
 
-막혔는지는 세션 기록으로 확인했다. 레포의 개발 안내(`AGENTS.md`)와 이 컴퓨터의 개인 스킬은 세 엔진 어디에도 실리지 않았다. 까닭과 경위는 [GOTCHAS.md](GOTCHAS.md)에 있다. 엔진 자체에 들어 있는 기본 스킬(예: Codex의 `skill-creator`)은 남는다.
+막혔는지는 세션 기록으로 확인했다. 레포의 개발 안내(`AGENTS.md`)와 이 컴퓨터의 개인 스킬은 세 엔진 어디에도 실리지 않았다. 까닭과 경위는 [GOTCHAS.md](GOTCHAS.md)에 있다. Codex 자체에 들어 있는 기본 스킬(예: `skill-creator`)은 남는다. Claude의 기본 스킬은 끄고 세션 기록에서 스킬 목록이 비어 있는 것을 확인했다(2026-11-04).
 
 ## 안전 모드와 허락
 

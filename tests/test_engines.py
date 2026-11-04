@@ -124,7 +124,7 @@ class EngineSessionTest(unittest.TestCase):
         client = self.make(engine=ClaudeEngine, mode="auto", on_text=chunks.append)
         client.start()
         client.send("메타")
-        self.assertEqual("".join(chunks), '받음: {"claudeCode": {"options": {"settingSources": []}}}')
+        self.assertEqual("".join(chunks), "받음: " + json.dumps(ClaudeEngine(WORKSPACE).session_meta(), ensure_ascii=False))
         chunks.clear()
         client = self.make(on_text=chunks.append)
         client.start()

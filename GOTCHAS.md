@@ -49,3 +49,9 @@
 - 해결: 로그인을 멈출 때 까닭(`cancelled`, `timeout`)을 따로 표시하고 그 표시로 판단한다. 상태·로그아웃 명령과 엔진의 출력은 `encoding="utf-8", errors="replace"`로 읽는다. 대화 파일은 읽기와 쓰기를 같은 잠금 안에서 하고, 바꿔 넣기가 `PermissionError`면 다섯 번까지 다시 한다. 기록을 쓰지 못하면 `record_error` 사건을 남기고 차례는 끝낸다. 세 가지 모두 macOS에서 그 모양을 흉내 낸 테스트로 재현한 뒤 고쳤다.
 - 교훈: 운영체제마다 다른 값(종료 코드, 기본 인코딩, 파일 잠금)에 기대는 판단은 하지 않는다. 플랫폼이 직접 표시를 남기고, 인코딩은 늘 적는다. Windows에서의 실제 동작은 팀원의 Windows 테스트로 확인한다.
 
+## Claude 샌드박스에 기본 스킬, 자동 메모리, claude.ai 계정 스킬이 실렸다 (2026-11-04)
+
+- 증상: Claude 엔진에 알려진 스킬을 물으면 플랫폼 스킬 2개 말고도 Claude Code 기본 스킬 14개(`code-review`, `loop`, `schedule` 같은 것)를 답했다. 세션 기록의 시스템 지시에 자동 메모리 안내(`MEMORY.md`)가 있었다. 샌드박스의 `.homes/claude/skills/synced/`에는 claude.ai 계정에서 켠 스킬 13개가 내려받아져 있었고, 그중 `data-to-html`과 `memo-to-json`은 플랫폼 스킬과 이름이 같았다.
+- 근본 원인: `settingSources: []`는 설정 파일만 막는다. 기본 스킬, 내장 플러그인(`plugin-authoring@builtin`)의 스킬, 자동 메모리, claude.ai 계정의 스킬 동기는 Claude Code가 기본으로 켠다.
+- 해결: `engines/claude.py`가 `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`로 실행하고, 세션을 열 때 `settings`로 `disableBundledSkills`, `autoMemoryEnabled: false`, `syncClaudeAiSkills: false`, `syncClaudeAiPlugins: false`, `enabledPlugins: {"plugin-authoring@builtin": false}`를 넘긴다. 기본 스킬만 끄면 `plugin-authoring` 하나가 남았다. 세션 기록에서 스킬 목록(`skill_listing`)이 없고 시스템 지시에 메모리 안내가 없는 것을 확인했다. 플랫폼 스킬은 그대로 읽었다.
+- 교훈: 엔진 버전이 오르면 새 기본 기능이 켜질 수 있다. 엔진을 올린 뒤에는 세션 기록의 스킬 목록과 시스템 지시를 다시 본다.

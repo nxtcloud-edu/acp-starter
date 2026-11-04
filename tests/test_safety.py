@@ -64,6 +64,22 @@ class SafetyTest(unittest.TestCase):
         meta = ClaudeEngine(ROOT).session_meta()
         self.assertEqual(meta["claudeCode"]["options"]["settingSources"], [])
 
+    def test_claude_sees_only_what_the_platform_gives(self):
+        # 2026-11-04: Claude에 Claude Code 기본 스킬 14개와 자동 메모리가 실렸다.
+        # 샌드박스에는 claude.ai 계정에서 켠 스킬도 내려받아져 있었다.
+        root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        with mock.patch.object(base, "HOMES", root):
+            env = ClaudeEngine.sandbox_env()
+        self.assertEqual(env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"], "1")
+        self.assertEqual(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
+        settings = ClaudeEngine(ROOT).session_meta()["claudeCode"]["options"]["settings"]
+        for key, value in (("disableBundledSkills", True), ("autoMemoryEnabled", False),
+                           ("syncClaudeAiSkills", False), ("syncClaudeAiPlugins", False)):
+            with self.subTest(key=key):
+                self.assertIs(settings[key], value)
+        self.assertIs(settings["enabledPlugins"]["plugin-authoring@builtin"], False)
+
     def test_workspace_has_no_engine_files(self):
         # 엔진만의 지시 파일이 작업 폴더에 있으면 엔진마다 다르게 일한다.
         for name in (".kiro", ".claude", ".codex", "AGENTS.md", "CLAUDE.md"):
