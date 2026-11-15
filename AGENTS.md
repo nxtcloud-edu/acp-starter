@@ -13,8 +13,9 @@
 
 - 사용자는 이 앱을 처음 고치는 학생일 수 있다. 처음이면 눈에 보이는 변화부터 함께 한다: 앱 이름과 한 줄 소개(`custom/brand.json`), 색감(`app/static/style.css`의 `:root` 토큰), 화면의 말.
 - 기능을 정해 주지 않는다. 사용자가 하고 싶은 일을 묻고, 선택지를 두세 개 제안하고, 사용자가 고른 것을 하나씩 만든다.
-- 더할 수 있는 기능의 목록은 `만들_곳.md`에 있다. 이 레포의 브랜치 `전체기능-예시`에 한 번 만들어 둔 기능(에이전트 여럿, 스킬, 일 스케줄, 결과함, 결과 보내기, 파일 올리기, 대화 목록)이 있다. 참고해서 사용자의 앱에 맞게 작게 다시 만든다.
+- 더할 수 있는 기능의 목록은 `만들_곳.md`에 있다. acp-starter 레포의 브랜치 `전체기능-예시`에 한 번 만들어 둔 기능(에이전트 여럿, 스킬, 일 스케줄, 결과함, 결과 보내기, 파일 올리기, 대화 목록)이 있다. 참고해서 사용자의 앱에 맞게 작게 다시 만든다.
 - 하나를 만들면 사용자가 앱을 새로 고쳐 직접 보게 한다. 그다음 것으로 넘어간다.
+- 그날 작업을 마칠 때 일지(`기록/일지/<날짜>.md`, `_틀.md`를 복사)와 변경 기록(`기록/변경.md`)을 남기자고 권한다. 사용자가 맡기면 정리해 준다. 그다음에 커밋과 푸시를 권한다. 사용자의 확인 없이 커밋하거나 푸시하지 않는다.
 
 ## 가장 중요한 규칙: 엔진이 바뀌어도 앱의 기능은 그대로 돈다
 
@@ -67,8 +68,8 @@
 
 ## 참고 코드
 
-- 브랜치 `전체기능-예시`: 이 앱에 기능을 많이 붙여 둔 모습이다. `git show 전체기능-예시:<경로>`로 읽거나, GitHub의 `https://github.com/nxtcloud-edu/acp-starter/tree/전체기능-예시`에서 읽는다. 그대로 되돌리지 말고 사용자가 고른 기능만 작게 다시 만든다.
-- Kiro Crew(https://github.com/kirodotdev/KiroCrew, Apache-2.0): 같은 층의 완성된 범용 플랫폼이다. 이 레포 옆에 클론해서 필요한 부분만 찾아 읽는다(`git clone --depth 1 https://github.com/kirodotdev/KiroCrew.git ../KiroCrew`). 소스는 `src/kiro_crew/`에 있고, 위치는 `만들_곳.md`에 있다. 코드를 그대로 가져오면 그 파일에 출처와 Apache-2.0 고지를 남긴다.
+- acp-starter 레포의 브랜치 `전체기능-예시`: 이 앱에 기능을 많이 붙여 둔 모습이다. GitHub의 `https://github.com/nxtcloud-edu/acp-starter/tree/전체기능-예시`에서 읽거나, 이 레포 밖의 폴더에 클론해서 읽는다(`git clone --depth 1 --branch 전체기능-예시 https://github.com/nxtcloud-edu/acp-starter.git <레포 밖의 폴더>/acp-starter-예시`). 그대로 되돌리지 말고 사용자가 고른 기능만 작게 다시 만든다.
+- Kiro Crew(https://github.com/kirodotdev/KiroCrew, Apache-2.0): 같은 층의 완성된 범용 플랫폼이다. 이 레포 밖의 폴더에 클론해서 필요한 부분만 찾아 읽는다(`git clone --depth 1 https://github.com/kirodotdev/KiroCrew.git <레포 밖의 폴더>/KiroCrew`). 이 레포 안에는 클론하지 않는다. 소스는 `src/kiro_crew/`에 있고, 위치는 `만들_곳.md`에 있다. 코드를 그대로 가져오면 그 파일에 출처와 Apache-2.0 고지를 남긴다.
 
 ## 실행
 
